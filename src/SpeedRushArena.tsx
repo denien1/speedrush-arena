@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { smartShare } from "@/lib/share";
 import { motion, AnimatePresence } from "framer-motion";
 import { Trophy, MousePointerClick, TimerReset, Keyboard, Crosshair, Share2, RefreshCw, Target, Crown, Sparkles, Award, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -173,7 +174,13 @@ export default function SpeedRushArena(){
             </Tabs>
           </div>
           <div className="space-y-6">
-            <DailyChallenge seedRef={seedRef} onShare={() => navigator.clipboard.writeText(window.location.href)} />
+            <DailyChallenge
+  seedRef={seedRef}
+  onShare={async () => {
+    const res = await smartShare({ title: "SpeedRush — Daily Challenge", text: "Try today’s daily challenge!" });
+    alert(res.ok ? "Link shared/copied! 🎉" : "Share failed. Try copying the URL manually.");
+  }}
+/>
             <Leaderboard rows={rows} />
             <GlobalBoard />
             <Achievements ach={ach} />
@@ -195,7 +202,15 @@ function Header({ name, setName, compact, setCompact }: { name: string, setName:
       <div className="flex items-center gap-2">
         <Input value={name} onChange={(e)=>setName(e.target.value)} className="w-40" placeholder="Your name"/>
         <div className="flex items-center gap-2 rounded-xl bg-white p-2 border border-slate-200 shadow-sm"><Settings2 className="h-4 w-4"/><span className="text-sm">Compact</span><Switch checked={compact} onCheckedChange={setCompact} /></div>
-        <Button variant="secondary" onClick={() => { navigator.clipboard.writeText("Come play SpeedRush Arena: "+window.location.href); }}><Share2 className="h-4 w-4 mr-2"/>Share</Button>
+        <Button
+  variant="secondary"
+  onClick={async () => {
+    const res = await smartShare({ title: "SpeedRush Arena", text: "Come play SpeedRush Arena!" });
+    alert(res.ok ? "Link shared/copied! 🎉" : "Share failed. Try copying the URL manually.");
+  }}
+>
+  <Share2 className="h-4 w-4 mr-2" />Share
+</Button>
       </div>
     </div>
   );
