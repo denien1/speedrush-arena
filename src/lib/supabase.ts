@@ -1,0 +1,32 @@
+import { createClient } from '@supabase/supabase-js'
+
+const url = import.meta.env.VITE_SUPABASE_URL as string
+const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string
+
+export const supabase = (url && key) ? createClient(url, key, {
+  auth: { persistSession: false },
+}) : null
+
+export function supaReady(){
+  return Boolean(supabase)
+}
+
+export type ModeKey = 'reaction' | 'cps' | 'typing' | 'aim'
+
+export async function submitScore(name: string, mode: ModeKey, value: number){
+  if(!supabase) return { error: 'no-supabase' }
+  const { error } = await supabase.from('scores').insert({ name, mode, value })
+  return { error }
+}
+
+export async function fetchTop(mode: ModeKey, limit = 10){
+  if(!supabase) return { data: [] as any[], error: 'no-supabase' }
+  const order = mode === 'reaction' ? { column: 'value', ascending: true } : { column: 'value', ascending: false }
+  const { data, error } = await supabase
+    .from('scores')
+    .select('id,created_at,name,mode,value')
+    .eq('mode', mode)
+    .order(order.column as any, { ascending: order.ascending })
+    .limit(limit)
+  return { data: data || [], error }
+}
