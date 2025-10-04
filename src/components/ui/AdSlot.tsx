@@ -1,4 +1,3 @@
-// src/components/ui/AdSlot.tsx
 import React from "react";
 
 export default function AdSlot({
