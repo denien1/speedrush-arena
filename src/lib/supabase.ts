@@ -33,7 +33,7 @@ export function supaReady() {
   return Boolean(supabase);
 }
 
-// ✅ Helper for safe submission
+// Optional export. If you keep relative helper in SpeedRushArena, you can ignore this.
 export async function submitIfValid(name: string, mode: ModeKey, value: number) {
   const v = Number.isFinite(value) ? Number(value) : 0;
   if (!supaReady() || v <= 0) return { skipped: true as const };
