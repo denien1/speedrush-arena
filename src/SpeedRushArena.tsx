@@ -209,21 +209,20 @@ function TypingGame({ playerName }: { playerName: string }) {
 }
 
 function AimGame({ playerName }: { playerName: string }) {
-  /* ===== Sprite sheet config — tuned for your uploaded image =====
-     Each row = a duck color. 6 columns total:
-     [0..3]=flying, 4=shot/falling, 5=dead.
-     If your frame is not exactly 64x64, adjust FRAME_W/FRAME_H.
-  */
-  const SPRITE_URL = "/duck-sprite.png"; // put the file in /public
-  const FRAME_W = 64;                     // ONE frame width (px)
-  const FRAME_H = 64;                     // ONE frame height (px)
-  const COLS = 6;                         // frames across in the sheet
-  const ROWS = 6;                         // how many color rows exist (guess 6 from your image; adjust if needed)
-  const ALIVE_FRAMES = 4;                 // 0..3 are flapping frames
-  const SHOT_COL = 4;                     // column index for "shot/falling"
-  const DEAD_COL = 5;                     // column index for "dead on ground"
+  /* ------------ SPRITE CONFIG (matches your sheet) ------------- */
+  const SPRITE_URL = "/duck-sprite.png";     // your sheet in /public
+  const COLS = 6;                            // frames across
+  const FRAME_W = 64;                        // single frame width  (adjust if needed)
+  const FRAME_H = 64;                        // single frame height (adjust if needed)
+  const FLY_FRAMES = 4;                      // 0..3 flap
+  const SHOT_COL = 4;                        // shot/falling pose
+  const DEAD_COL = 5;                        // dead on ground
 
-  /* ===== Game config ===== */
+  /* ------------ BACKGROUND (uses your forest image) ------------- */
+  const BG_URL = "/forest-bg.png";           // in /public
+  const SKY_GRADIENT = ["#cfe9ff", "#eaf7ff"]; // sky fallback/overlay
+
+  /* ------------------------- GAME CONFIG ------------------------ */
   type DiffKey = "easy" | "medium" | "hard";
   type DuckState = "alive" | "falling" | "dead";
   type Duck = {
@@ -233,146 +232,135 @@ function AimGame({ playerName }: { playerName: string }) {
     rot: number;
     state: DuckState;
     face: 1 | -1;
-    row: number;       // sprite row (color)
+    row: number;          // sprite row (color)
     deadAt?: number;
   };
 
-  const DUCK_W = FRAME_W;
-  const DUCK_H = FRAME_H;
+  const GRAVITY = 700;
   const DURATION = 15;
-  const GRAVITY = 650;
-  const RESPAWN_MS = 200;
+  const RESPAWN_MS = 180;
 
   const DIFF: Record<DiffKey, { ducks: number; speedMin: number; speedMax: number; mult: number }> = {
     easy:   { ducks: 4, speedMin: 70,  speedMax: 120, mult: 1.0 },
     medium: { ducks: 6, speedMin: 100, speedMax: 180, mult: 1.1 },
-    hard:   { ducks: 9, speedMin: 150, speedMax: 230, mult: 1.25 },
+    hard:   { ducks: 9, speedMin: 150, speedMax: 240, mult: 1.25 },
   };
 
-  /* Background (soft sky fallback) */
-  const FOREST_BG = "linear-gradient(180deg,#cfe9ff 0%,#eaf7ff 70%)";
-  const FOREST_IMG = "/forest-bg.png"; // optional; ignore if you don’t have it
-  
-  /* ===== State ===== */
+  /* --------------------------- STATE ---------------------------- */
   const [difficulty, setDifficulty] = React.useState<DiffKey>("medium");
   const [active, setActive] = React.useState(false);
-  const [left, setLeft] = React.useState(DURATION);
+  const [timeLeft, setTimeLeft] = React.useState(DURATION);
   const [hits, setHits] = React.useState(0);
   const [misses, setMisses] = React.useState(0);
   const [score, setScore] = React.useState(0);
   const [combo, setCombo] = React.useState(0);
   const [bestCombo, setBestCombo] = React.useState(0);
-  const [ducks, setDucks] = React.useState<Duck[]>([]);
 
-  const arenaRef = React.useRef<HTMLDivElement | null>(null);
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const containerRef = React.useRef<HTMLDivElement | null>(null);
   const rafRef = React.useRef<number>();
   const lastTsRef = React.useRef<number>(0);
+  const ducksRef = React.useRef<Duck[]>([]);
   const submittedRef = React.useRef(false);
 
-  /* Tiny SFX */
-  const audioRef = React.useRef<AudioContext | null>(null);
-  const ctx = () =>
-    (audioRef.current ??= new (window.AudioContext || (window as any).webkitAudioContext)());
-  function beep(f:number, ms=90, v=0.15){ try{ const ac=ctx(); const o=ac.createOscillator(); const g=ac.createGain(); o.type="square"; o.frequency.value=f; g.gain.value=v; o.connect(g); g.connect(ac.destination); o.start(); setTimeout(()=>{o.stop(); o.disconnect(); g.disconnect();}, ms);}catch{} }
-  const hitSfx = (p=0)=>beep(680+p,70,.18);
-  const missSfx = ()=>beep(180,110,.10);
-  const quackSfx = ()=>beep(520,70,.14);
+  // graphics
+  const bgImgRef = React.useRef<HTMLImageElement | null>(null);
+  const spriteRawRef = React.useRef<HTMLImageElement | null>(null);
+  const spriteKeyedRef = React.useRef<HTMLCanvasElement | null>(null); // chroma-keyed version
+  const rowsRef = React.useRef<number>(1);
 
-  /* Helpers */
-  const rand=(a:number,b:number)=>a+Math.random()*(b-a);
-  function measure() {
-    const el = arenaRef.current; if (!el) return {w:0,h:0};
+  // bg scroll
+  const bgScrollRef = React.useRef(0);
+
+  /* --------------------------- SFX ------------------------------ */
+  const audioRef = React.useRef<AudioContext | null>(null);
+  const ctx = () => (audioRef.current ??= new (window.AudioContext || (window as any).webkitAudioContext)());
+  function beep(f:number, ms=90, v=0.12){ try{ const ac=ctx(); const o=ac.createOscillator(); const g=ac.createGain(); o.type="square"; o.frequency.value=f; g.gain.value=v; o.connect(g); g.connect(ac.destination); o.start(); setTimeout(()=>{o.stop(); o.disconnect(); g.disconnect();}, ms);}catch{} }
+  const sfxHit = (p=0)=>beep(680+p,70,.16);
+  const sfxMiss = ()=>beep(180,110,.10);
+  const sfxQuack = ()=>beep(520,70,.14);
+
+  /* --------------------- LOAD IMAGES (ONCE) --------------------- */
+  React.useEffect(() => {
+    // BG
+    const bg = new Image();
+    bg.src = BG_URL;
+    bg.onload = () => { bgImgRef.current = bg; };
+
+    // sprite (raw)
+    const spr = new Image();
+    spr.src = SPRITE_URL;
+    spr.onload = () => {
+      spriteRawRef.current = spr;
+      // derive rows
+      rowsRef.current = Math.max(1, Math.floor(spr.height / FRAME_H));
+      // chroma-key the sprite once -> cached canvas
+      spriteKeyedRef.current = chromaKeySprite(spr, {key:[235,235,235], tol:30}); // remove near-white bg
+      // after assets ready, ensure we have ducks and a render
+      spawnDucks();
+      draw(0); 
+    };
+  }, []);
+
+  /* --------------- CANVAS SIZE (DPR + container fit) ----------- */
+  function fitCanvas() {
+    const el = canvasRef.current, box = containerRef.current;
+    if (!el || !box) return;
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const w = box.clientWidth;
+    const h = Math.max(256, Math.round(w * 0.38)); // nice ratio
+    el.style.width = `${w}px`;
+    el.style.height = `${h}px`;
+    el.width = Math.round(w * dpr);
+    el.height = Math.round(h * dpr);
+    const g = el.getContext("2d")!;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.imageSmoothingEnabled = false; // pixel-art crisp
+  }
+
+  React.useEffect(() => {
+    fitCanvas();
+    const r = new ResizeObserver(() => fitCanvas());
+    if (containerRef.current) r.observe(containerRef.current);
+    return () => r.disconnect();
+  }, []);
+
+  /* ----------------------- SPAWN / UTILS ----------------------- */
+  const rand = (a:number,b:number)=>a+Math.random()*(b-a);
+
+  function arenaSize() {
+    const el = canvasRef.current;
+    if (!el) return {w:600,h:260};
     return { w: el.clientWidth, h: el.clientHeight };
   }
 
-  function makeDuck(id:number,w:number,h:number): Duck {
+  function makeDuck(id:number): Duck {
+    const {w,h} = arenaSize();
     const { speedMin, speedMax } = DIFF[difficulty];
-    const x = rand(DUCK_W/2, Math.max(DUCK_W/2, w - DUCK_W/2));
-    const y = rand(DUCK_H/2 + 8, Math.max(DUCK_H/2 + 8, h * 0.65));
+    const x = rand(FRAME_W/2, Math.max(FRAME_W/2, w - FRAME_W/2));
+    const y = rand(FRAME_H/2 + 8, Math.max(FRAME_H/2 + 8, h * 0.68));
     const sp = rand(speedMin, speedMax);
     const ang = rand(-Math.PI*0.35, Math.PI*0.35);
     const face: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
-    const row = Math.floor(Math.random() * ROWS); // pick a random color row
-    return { id, x, y, vx: Math.cos(ang)*sp*face, vy: Math.sin(ang)*sp*0.35, rot: 0, state: "alive", face, row };
+    const row = Math.floor(Math.random()*rowsRef.current);
+    return { id, x, y, vx: Math.cos(ang)*sp*face, vy: Math.sin(ang)*sp*0.35, rot: 0, state:"alive", face, row };
   }
 
-  function spawn(retry=0) {
-    const { w, h } = measure();
-    if (w < DUCK_W*2 || h < DUCK_H*2) {
-      if (retry > 10) {
-        const N = DIFF[difficulty].ducks;
-        setDucks(Array.from({length:N},(_,i)=>makeDuck(i+1,600,260)));
-        return;
-      }
-      requestAnimationFrame(()=>spawn(retry+1));
-      return;
-    }
-    const N = DIFF[difficulty].ducks;
-    setDucks(Array.from({length:N},(_,i)=>makeDuck(i+1,w,h)));
+  function spawnDucks() {
+    const n = DIFF[difficulty].ducks;
+    ducksRef.current = Array.from({length:n}, (_,i)=>makeDuck(i+1));
   }
 
-  /* RAF loop */
-  const tick = (ts:number) => {
-    if (!active) return;
-    if (!lastTsRef.current) lastTsRef.current = ts;
-    const dt = Math.max(0, Math.min((ts - lastTsRef.current)/1000, 0.05));
-    lastTsRef.current = ts;
-
-    const { w, h } = measure();
-    const W = w || 600, H = h || 260, groundY = H - DUCK_H/2;
-
-    setDucks(prev => prev.map(d => {
-      let {x,y,vx,vy,rot,state,face,deadAt,row} = d;
-
-      if (state === "alive") {
-        x += vx*dt; y += vy*dt;
-        if (x <= DUCK_W/2)     { x = DUCK_W/2;     vx = Math.abs(vx);  face = 1; }
-        if (x >= W - DUCK_W/2) { x = W - DUCK_W/2; vx = -Math.abs(vx); face = -1; }
-        if (y <= DUCK_H/2)     { y = DUCK_H/2;     vy = Math.abs(vy)*0.6; }
-        if (y >= H*0.7)        { y = H*0.7;        vy = -Math.abs(vy)*0.6; }
-
-      } else if (state === "falling") {
-        vy += GRAVITY*dt; y += vy*dt; rot += 360*dt*.8;
-        if (y >= groundY) { y = groundY; vy = 0; vx = 0; state = "dead"; deadAt = performance.now(); }
-      } else if (state === "dead") {
-        if (deadAt && performance.now() - deadAt >= RESPAWN_MS && active) {
-          const { w, h } = measure();
-          return makeDuck(d.id, w || 600, h || 260);
-        }
-      }
-
-      return { ...d, x, y, vx, vy, rot, state, face, deadAt, row };
-    }));
-
-    rafRef.current = requestAnimationFrame(tick);
-  };
-
-  React.useEffect(() => {
-    if (!active) return;
-    lastTsRef.current = 0;
-    cancelAnimationFrame(rafRef.current!);
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current!);
-  }, [active]);
-
-  /* Timer + cleanup */
-  React.useEffect(() => {
-    if (!active) return;
-    if (left <= 0) { finish(); return; }
-    const t = setTimeout(() => setLeft(s => s - 1), 1000);
-    return () => clearTimeout(t);
-  }, [active, left]);
-
-  React.useEffect(() => () => cancelAnimationFrame(rafRef.current!), []);
-  React.useEffect(() => { if (!active) spawn(0); }, [difficulty]);
-
-  /* Controls */
+  /* ----------------------- GAME LOOP --------------------------- */
   function start() {
     setHits(0); setMisses(0); setScore(0); setCombo(0); setBestCombo(0);
-    setLeft(DURATION); setActive(true); submittedRef.current = false;
+    setTimeLeft(DURATION); setActive(true); submittedRef.current = false;
     lastTsRef.current = 0;
-    requestAnimationFrame(()=>requestAnimationFrame(()=>spawn(0)));
+    spawnDucks();
+    cancelAnimationFrame(rafRef.current!);
+    rafRef.current = requestAnimationFrame(step);
   }
+
   async function finish() {
     if (submittedRef.current) return;
     const value = Number(hits.toFixed(2));
@@ -381,114 +369,216 @@ function AimGame({ playerName }: { playerName: string }) {
     setActive(false);
   }
 
-  function onArenaClick() {
+  React.useEffect(() => {
     if (!active) return;
-    setMisses(m=>m+1); setCombo(0); missSfx();
-  }
-  function onDuckClick(e:React.MouseEvent,id:number) {
-    e.stopPropagation(); if (!active) return;
-    setDucks(prev => prev.map(d => d.id===id && d.state==="alive" ? { ...d, state:"falling", vy:-140 } : d));
-    setHits(h=>h+1);
-    setCombo(c=>{
-      const next=c+1; setBestCombo(b=>Math.max(b,next));
-      const mult=DIFF[difficulty].mult; const comboBonus=1+next*0.10;
-      setScore(s=>Number((s + 1*mult*comboBonus).toFixed(2)));
-      hitSfx(Math.min(300,next*18)); quackSfx(); return next;
+    if (timeLeft <= 0) { finish(); return; }
+    const t = setTimeout(() => setTimeLeft(s => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [active, timeLeft]);
+
+  function step(ts:number) {
+    if (!active) return;
+    if (!lastTsRef.current) lastTsRef.current = ts;
+    const dt = Math.max(0, Math.min((ts - lastTsRef.current)/1000, 0.05));
+    lastTsRef.current = ts;
+
+    // move/physics
+    const {w,h} = arenaSize();
+    const ground = h - FRAME_H/2;
+
+    ducksRef.current = ducksRef.current.map(d => {
+      let {x,y,vx,vy,rot,state,face,row,deadAt} = d;
+
+      if (state === "alive") {
+        x += vx*dt; y += vy*dt;
+        if (x <= FRAME_W/2)          { x = FRAME_W/2;          vx = Math.abs(vx);  face = 1; }
+        if (x >= w - FRAME_W/2)      { x = w - FRAME_W/2;      vx = -Math.abs(vx); face = -1; }
+        if (y <= FRAME_H/2)          { y = FRAME_H/2;          vy = Math.abs(vy)*0.6; }
+        if (y >= h*0.7)              { y = h*0.7;              vy = -Math.abs(vy)*0.6; }
+      } else if (state === "falling") {
+        vy += GRAVITY*dt;
+        y  += vy*dt;
+        rot += 360*dt*.8;
+        if (y >= ground) { y = ground; vy = 0; vx = 0; state = "dead"; deadAt = performance.now(); }
+      } else if (state === "dead") {
+        if (deadAt && performance.now() - deadAt >= RESPAWN_MS && active) {
+          return makeDuck(d.id); // respawn
+        }
+      }
+      return { ...d, x,y,vx,vy,rot,state,face,row,deadAt };
     });
+
+    // bg scroll
+    bgScrollRef.current = (bgScrollRef.current + dt*60) % 800;
+
+    draw(dt);
+    rafRef.current = requestAnimationFrame(step);
   }
 
-  /* UI */
+  function onCanvasClick(e: React.MouseEvent) {
+    if (!active) return;
+    const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
+    // topmost first
+    for (let i = ducksRef.current.length - 1; i >= 0; i--) {
+      const d = ducksRef.current[i];
+      if (d.state !== "alive") continue;
+      // hit test (circle)
+      const dx = px - d.x;
+      const dy = py - d.y;
+      const r = Math.min(FRAME_W, FRAME_H)*0.45;
+      if (dx*dx + dy*dy <= r*r) {
+        // hit!
+        ducksRef.current[i] = { ...d, state:"falling", vy:-160 };
+        setHits(h => h+1);
+        setCombo(c => {
+          const next = c+1;
+          setBestCombo(b => Math.max(b,next));
+          const mult = DIFF[difficulty].mult;
+          const bonus = 1 + next*0.10;
+          setScore(s => Number((s + 1*mult*bonus).toFixed(2)));
+          sfxHit(Math.min(300,next*18));
+          sfxQuack();
+          return next;
+        });
+        draw(0);
+        return; // don’t count miss
+      }
+    }
+
+    // miss
+    setMisses(m => m+1);
+    setCombo(0);
+    sfxMiss();
+  }
+
+  /* --------------------- RENDERING (CANVAS) -------------------- */
+  function draw(_dt:number) {
+    const c = canvasRef.current; if (!c) return;
+    const g = c.getContext("2d")!;
+
+    const w = c.clientWidth;
+    const h = c.clientHeight;
+
+    // sky gradient
+    const grad = g.createLinearGradient(0,0,0,h);
+    grad.addColorStop(0, SKY_GRADIENT[0]);
+    grad.addColorStop(1, SKY_GRADIENT[1]);
+    g.fillStyle = grad;
+    g.fillRect(0,0,w,h);
+
+    // forest background (looping)
+    const bg = bgImgRef.current;
+    if (bg && bg.complete) {
+      const bw = 800; // tile width
+      const bh = Math.min(h, Math.round(bg.height * (w / bg.width))); // scale to fit width nicely
+      const y = Math.round(h - bh);
+      const x = -Math.floor(bgScrollRef.current % bw);
+      g.drawImage(bg, x, y, bw, bh);
+      g.drawImage(bg, x + bw, y, bw, bh);
+    }
+
+    // ducks
+    const spr = spriteKeyedRef.current || spriteCanvasFallback(spriteRawRef.current);
+    if (spr) {
+      ducksRef.current.forEach(d => {
+        const sx = d.state === "alive"
+          ? Math.floor((performance.now()/120) % FLY_FRAMES) * FRAME_W
+          : (d.state === "falling" ? SHOT_COL * FRAME_W : DEAD_COL * FRAME_W);
+        const sy = d.row * FRAME_H;
+
+        g.save();
+        g.translate(d.x, d.y);
+        g.scale(d.face, 1);
+        g.rotate(d.rot * Math.PI/180);
+        g.imageSmoothingEnabled = false;
+        g.drawImage(
+          spr,
+          sx, sy, FRAME_W, FRAME_H,
+          -FRAME_W/2, -FRAME_H/2, FRAME_W, FRAME_H
+        );
+        g.restore();
+      });
+    }
+  }
+
+  /* ----------- CHROMA-KEY (strip near-white background) -------- */
+  function chromaKeySprite(img: HTMLImageElement, opt:{key:[number,number,number], tol:number}) {
+    const {key:[kr,kg,kb], tol} = opt;
+    const w = img.width, h = img.height;
+    const off = document.createElement("canvas");
+    off.width = w; off.height = h;
+    const g = off.getContext("2d")!;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(img, 0, 0);
+    const data = g.getImageData(0,0,w,h);
+    const p = data.data;
+    for (let i=0;i<p.length;i+=4) {
+      const r=p[i], g1=p[i+1], b=p[i+2];
+      if (Math.abs(r-kr)<=tol && Math.abs(g1-kg)<=tol && Math.abs(b-kb)<=tol) {
+        p[i+3] = 0; // make transparent
+      }
+    }
+    g.putImageData(data,0,0);
+    return off;
+  }
+
+  function spriteCanvasFallback(img: HTMLImageElement | null) {
+    if (!img) return null;
+    const cvs = document.createElement("canvas");
+    cvs.width = img.width; cvs.height = img.height;
+    const g = cvs.getContext("2d")!;
+    g.imageSmoothingEnabled = false;
+    g.drawImage(img,0,0);
+    return cvs;
+  }
+
+  /* --------------------------- UI ------------------------------ */
   return (
     <div className="border rounded-2xl p-4">
-      <style>{`
-        /* Animate frames 0..3 horizontally on the chosen row */
-        @keyframes duckFlap {
-          from { background-position: 0 0; }
-          to   { background-position: -${FRAME_W * ALIVE_FRAMES}px 0; }
-        }
-        .duck-anim { animation: duckFlap .42s steps(${ALIVE_FRAMES}) infinite; }
-        .duck-stop { animation: none !important; }
-      `}</style>
-
       <div className="font-semibold">Aim Trainer (15s)</div>
-      <div className="text-sm text-slate-500 mb-3">Choose difficulty. Score scales with difficulty & combo streak.</div>
+      <div className="text-sm text-slate-500 mb-3">
+        Choose difficulty. Score scales with difficulty & combo streak.
+      </div>
 
       <div className="flex items-center gap-2 mb-3">
         <span className="text-sm text-slate-600 mr-1">Difficulty:</span>
-        {(["easy","medium","hard"] as DiffKey[]).map(k=>(
-          <button key={k}
+        {(["easy","medium","hard"] as DiffKey[]).map(k => (
+          <button
+            key={k}
             className={`px-3 py-1 rounded ${difficulty===k?"bg-slate-900 text-white":"bg-slate-100"}`}
             onClick={()=>!active && setDifficulty(k)}
             disabled={active}
-            title={`×${DIFF[k].mult}`}>
+            title={`×${DIFF[k].mult}`}
+          >
             {k[0].toUpperCase()+k.slice(1)} (×{DIFF[k].mult})
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
-          <button className="px-3 py-1 rounded bg-slate-900 text-white disabled:opacity-50" onClick={start} disabled={active}>
+          <button
+            className="px-3 py-1 rounded bg-slate-900 text-white disabled:opacity-50"
+            onClick={start}
+            disabled={active}
+          >
             {active ? "Running..." : "Start"}
           </button>
-          <div className="text-sm text-slate-600">Time left: {left}s</div>
+          <div className="text-sm text-slate-600">Time left: {timeLeft}s</div>
         </div>
       </div>
 
-      {/* Arena */}
-      <div
-        ref={arenaRef}
-        onClick={onArenaClick}
-        className="relative h-64 rounded-2xl overflow-hidden select-none"
-        style={{ background: FOREST_BG }}
-      >
-        {active && (
-          <div className="absolute top-2 right-2 bg-white/90 text-slate-900 text-xs font-semibold px-2 py-1 rounded-md z-[1]">
-            {left}s
-          </div>
-        )}
+      <div ref={containerRef} className="relative h-64 rounded-2xl overflow-hidden select-none">
+        <canvas
+          ref={canvasRef}
+          onClick={onCanvasClick}
+          className="absolute inset-0 block w-full h-full cursor-crosshair"
+        />
         {!active && (
-          <div className="absolute inset-0 flex items-center justify-center z-[1]">
-            <button onClick={start} className="px-4 py-2 rounded bg-white shadow">Start</button>
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <div className="px-4 py-2 rounded bg-white shadow text-slate-900">Start</div>
           </div>
         )}
-
-        {/* Ducks */}
-        {ducks.map(d=>{
-          const falling = d.state !== "alive";
-
-          // Y offset selects the row (each row is FRAME_H tall)
-          const rowY = -d.row * FRAME_H;
-
-          // Freeze to SHOT/DEAD column when not alive
-          const frozenX =
-            d.state === "falling" ? -(SHOT_COL * FRAME_W)
-            : d.state === "dead" ? -(DEAD_COL * FRAME_W)
-            : 0;
-
-          // For alive ducks we let CSS steps animate columns 0..3,
-          // so we set X=0 here; the keyframes will move it.
-          const bgPos = falling ? `${frozenX}px ${rowY}px` : `0px ${rowY}px`;
-
-          return (
-            <button
-              key={d.id}
-              aria-label={`duck-${d.id}`}
-              onClick={(e)=>onDuckClick(e,d.id)}
-              className={`absolute ${falling ? "duck-stop" : "duck-anim"}`}
-              style={{
-                left: 0, top: 0,
-                width: DUCK_W, height: DUCK_H,
-                zIndex: 2, display: "block",
-                transform: `translate3d(${d.x - DUCK_W/2}px, ${d.y - DUCK_H/2}px, 0) scaleX(${d.face}) rotate(${d.rot}deg)`,
-                transformOrigin: "center",
-                backgroundImage: `url(${SPRITE_URL})`,
-                backgroundSize: `${COLS * FRAME_W}px ${ROWS * FRAME_H}px`,
-                backgroundRepeat: "no-repeat",
-                backgroundPosition: bgPos,
-                backgroundColor: "#f59e0b20",
-              }}
-              title="quack!"
-            />
-          );
-        })}
       </div>
 
       <div className="grid grid-cols-4 gap-4 mt-4">
