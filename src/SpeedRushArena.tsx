@@ -437,77 +437,262 @@ function TypingGame({ playerName }: { playerName: string }) {
 ---------------------------------------------------------------------------- */
 
 function AimGame({ playerName }: { playerName: string }) {
-  const DURATION = 15;
+  // --- DIFFICULTY PRESETS (now includes a score multiplier) -----------------
+  type DiffKey = "easy" | "medium" | "hard";
+  const DIFF: Record<
+    DiffKey,
+    { ducks: number; speedMin: number; speedMax: number; mult: number }
+  > = {
+    easy:   { ducks: 4, speedMin: 50,  speedMax: 110, mult: 1.0 },
+    medium: { ducks: 6, speedMin: 70,  speedMax: 140, mult: 1.1 },
+    hard:   { ducks: 9, speedMin: 110, speedMax: 200, mult: 1.2 },
+  };
+
+  const DUCK_SIZE = 28;         // px
+  const DURATION  = 15;         // seconds
+
+  // --- STATE ----------------------------------------------------------------
+  const [difficulty, setDifficulty] = useState<DiffKey>("medium");
   const [active, setActive] = useState(false);
   const [left, setLeft] = useState(DURATION);
   const [hits, setHits] = useState(0);
-  const [target, setTarget] = useState<{ x: number; y: number }>(() => ({ x: 50, y: 50 }));
+  const [misses, setMisses] = useState(0);
+
+  // NEW: score & combo
+  const [score, setScore] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [bestCombo, setBestCombo] = useState(0);
+
+  const [ducks, setDucks] = useState<
+    { id: number; x: number; y: number; vx: number; vy: number }[]
+  >([]);
+  const arenaRef = useRef<HTMLDivElement | null>(null);
+  const rafRef = useRef<number>();
+  const lastTsRef = useRef<number>(0);
   const submittedRef = useRef(false);
 
-  function randomPos() {
-    const pad = 10;
-    const x = pad + Math.random() * (100 - pad * 2);
-    const y = pad + Math.random() * (100 - pad * 2);
-    setTarget({ x, y });
+  // --- SFX ------------------------------------------------------------------
+  const audioRef = useRef<AudioContext | null>(null);
+  function ctx() { return (audioRef.current ??= new (window.AudioContext || (window as any).webkitAudioContext)()); }
+  function beep(freq: number, durMs = 90, vol = 0.15) {
+    try {
+      const ac = ctx();
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+      o.type = "square";
+      o.frequency.value = freq;
+      g.gain.value = vol;
+      o.connect(g); g.connect(ac.destination);
+      o.start(); setTimeout(() => { o.stop(); o.disconnect(); g.disconnect(); }, durMs);
+    } catch {}
+  }
+  const hitSfx  = (comboPitch = 0) => beep(660 + comboPitch, 70, 0.18);
+  const missSfx = () => beep(180, 110, 0.10);
+
+  // --- UTILS ----------------------------------------------------------------
+  const rand = (a: number, b: number) => a + Math.random() * (b - a);
+  function makeDuck(id: number, w: number, h: number) {
+    const { speedMin, speedMax } = DIFF[difficulty];
+    const pad = DUCK_SIZE;
+    const x = rand(pad, Math.max(pad, w - pad));
+    const y = rand(pad, Math.max(pad, h - pad));
+    const sp = rand(speedMin, speedMax);
+    const ang = rand(0, Math.PI * 2);
+    return { id, x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp };
+  }
+  function spawnDucks() {
+    const rect = arenaRef.current?.getBoundingClientRect();
+    const w = rect?.width ?? 600;
+    const h = rect?.height ?? 260;
+    const N = DIFF[difficulty].ducks;
+    setDucks(Array.from({ length: N }, (_, i) => makeDuck(i + 1, w, h)));
   }
 
+  // --- LOOP -----------------------------------------------------------------
+  const tick = (ts: number) => {
+    if (!active) return;
+    if (!lastTsRef.current) lastTsRef.current = ts;
+    const dt = (ts - lastTsRef.current) / 1000;
+    lastTsRef.current = ts;
+
+    const rect = arenaRef.current?.getBoundingClientRect();
+    const w = rect?.width ?? 600;
+    const h = rect?.height ?? 260;
+
+    setDucks(prev =>
+      prev.map(d => {
+        let { x, y, vx, vy } = d;
+        x += vx * dt; y += vy * dt;
+
+        // bounce
+        if (x <= DUCK_SIZE / 2) { x = DUCK_SIZE / 2;           vx = Math.abs(vx); }
+        else if (x >= w - DUCK_SIZE / 2) { x = w - DUCK_SIZE / 2; vx = -Math.abs(vx); }
+        if (y <= DUCK_SIZE / 2) { y = DUCK_SIZE / 2;           vy = Math.abs(vy); }
+        else if (y >= h - DUCK_SIZE / 2) { y = h - DUCK_SIZE / 2; vy = -Math.abs(vy); }
+        return { ...d, x, y, vx, vy };
+      })
+    );
+
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  // --- LIFECYCLE ------------------------------------------------------------
   function start() {
-    setActive(true);
+    setHits(0); setMisses(0);
+    setScore(0); setCombo(0); setBestCombo(0);
     setLeft(DURATION);
-    setHits(0);
-    randomPos();
+    setActive(true);
     submittedRef.current = false;
+    spawnDucks();
+    lastTsRef.current = 0;
+    cancelAnimationFrame(rafRef.current!);
+    rafRef.current = requestAnimationFrame(tick);
   }
 
   async function finish() {
     if (submittedRef.current) return;
-    // Submit HITS (before reset)
+    // Keep leaderboard value as HITS to avoid DB change
     const value = Number(hits.toFixed(2));
     if (value > 0) {
       await submitIfValid(playerName, "aim", value);
       submittedRef.current = true;
     }
     setActive(false);
+    cancelAnimationFrame(rafRef.current!);
   }
 
-  // timer
   useEffect(() => {
     if (!active) return;
-    if (left <= 0) {
-      finish();
-      return;
-    }
-    const t = setTimeout(() => setLeft((s) => s - 1), 1000);
+    if (left <= 0) { finish(); return; }
+    const t = setTimeout(() => setLeft(s => s - 1), 1000);
     return () => clearTimeout(t);
-  }, [active, left, hits]);
+  }, [active, left]);
+
+  useEffect(() => () => cancelAnimationFrame(rafRef.current!), []);
+  useEffect(() => { if (!active) spawnDucks(); /* re-seed on diff change */ }, [difficulty]);
+
+  // --- INPUT ----------------------------------------------------------------
+  function onArenaClick() {
+    if (!active) return;
+    setMisses(m => m + 1);
+    setCombo(0);
+    missSfx();
+  }
+
+  function onDuckClick(e: React.MouseEvent, id: number) {
+    e.stopPropagation();
+    if (!active) return;
+
+    // hits & combo
+    setHits(h => h + 1);
+    setCombo(c => {
+      const next = c + 1;
+      setBestCombo(b => Math.max(b, next));
+
+      // score gain = base(1) * difficulty multiplier * combo bonus
+      const mult = DIFF[difficulty].mult;     // e.g., 1.2 on Hard
+      const comboBonus = 1 + next * 0.10;     // +10% per streak step
+      const gain = 1 * mult * comboBonus;
+      setScore(s => Number((s + gain).toFixed(2)));
+
+      // pitch up with combo
+      hitSfx(Math.min(300, next * 20));
+      return next;
+    });
+
+    // respawn duck
+    const rect = arenaRef.current?.getBoundingClientRect();
+    const w = rect?.width ?? 600;
+    const hgt = rect?.height ?? 260;
+    setDucks(prev => prev.map(d => (d.id === id ? makeDuck(id, w, hgt) : d)));
+  }
+
+  // --- UI -------------------------------------------------------------------
+  const acc = hits + misses === 0 ? null : Math.round((hits / (hits + misses)) * 100);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>Aim Trainer (15s)</CardTitle>
-        <CardDescription>Click the target as many times as you can.</CardDescription>
+        <CardDescription>
+          Difficulty affects speed & duck count. Score scales with difficulty and combo streak.
+        </CardDescription>
       </CardHeader>
+
       <CardContent>
-        <div className="flex items-center gap-3 mb-3">
-          <Button onClick={start} disabled={active}>
-            {active ? "Running…" : "Start"}
-          </Button>
-          <div className="text-sm text-slate-600">Time left: {left}s</div>
-          <div className="text-sm text-slate-600">Hits: {hits}</div>
+        {/* Difficulty + controls */}
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-sm text-slate-600 mr-1">Difficulty:</span>
+          {(["easy","medium","hard"] as DiffKey[]).map(key => (
+            <Button
+              key={key}
+              variant={difficulty === key ? "default" : "secondary"}
+              size="sm"
+              onClick={() => !active && setDifficulty(key)}
+              disabled={active}
+              title={`Multiplier ×${DIFF[key].mult.toFixed(1)}`}
+            >
+              {key[0].toUpperCase() + key.slice(1)} (×{DIFF[key].mult})
+            </Button>
+          ))}
+          <div className="ml-auto flex items-center gap-2">
+            <Button onClick={start} disabled={active}>{active ? "Running…" : "Start"}</Button>
+            <div className="text-sm text-slate-600">Time left: {left}s</div>
+          </div>
         </div>
 
-        <div className="relative h-64 rounded-2xl bg-slate-100 overflow-hidden">
-          {/* target */}
-          <button
-            aria-label="target"
-            onClick={() => {
-              if (!active) return;
-              setHits((h) => h + 1);
-              randomPos();
-            }}
-            className="absolute h-8 w-8 rounded-full bg-rose-500 shadow"
-            style={{ left: `${target.x}%`, top: `${target.y}%`, transform: "translate(-50%, -50%)" }}
-          />
+        {/* Arena */}
+        <div
+          ref={arenaRef}
+          onClick={onArenaClick}
+          className="relative h-64 rounded-2xl bg-slate-900 overflow-hidden select-none"
+        >
+          {active && (
+            <div className="absolute top-2 right-2 bg-white/90 text-slate-900 text-xs font-semibold px-2 py-1 rounded-md">
+              {left}s
+            </div>
+          )}
+
+          {!active && (
+            <div className="absolute inset-0 flex items-center justify-center">
+              <Button onClick={start} className="shadow-lg">Start</Button>
+            </div>
+          )}
+
+          {ducks.map(d => (
+            <button
+              key={d.id}
+              aria-label={`duck-${d.id}`}
+              onClick={(e) => onDuckClick(e, d.id)}
+              className="absolute rounded-full bg-amber-400 shadow-lg ring-2 ring-black/20 hover:scale-110 transition-transform"
+              style={{
+                width: DUCK_SIZE,
+                height: DUCK_SIZE,
+                left: d.x - DUCK_SIZE / 2,
+                top:  d.y - DUCK_SIZE / 2,
+              }}
+            />
+          ))}
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-4 gap-4 mt-4">
+          <div className="rounded-xl bg-slate-100 p-4 text-center">
+            <div className="text-slate-500 text-sm">Hits</div>
+            <div className="text-2xl font-bold">{hits}</div>
+          </div>
+          <div className="rounded-xl bg-slate-100 p-4 text-center">
+            <div className="text-slate-500 text-sm">Misses</div>
+            <div className="text-2xl font-bold">{misses}</div>
+          </div>
+          <div className="rounded-xl bg-slate-100 p-4 text-center">
+            <div className="text-slate-500 text-sm">Combo</div>
+            <div className="text-2xl font-bold">{combo} <span className="text-sm text-slate-500">best {bestCombo}</span></div>
+          </div>
+          <div className="rounded-xl bg-slate-100 p-4 text-center">
+            <div className="text-slate-500 text-sm">Score</div>
+            <div className="text-2xl font-bold">{score.toFixed(2)}</div>
+          </div>
         </div>
       </CardContent>
     </Card>
