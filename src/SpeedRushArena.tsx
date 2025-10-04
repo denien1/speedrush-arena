@@ -209,13 +209,19 @@ function TypingGame({ playerName }: { playerName: string }) {
 }
 
 function AimGame({ playerName }: { playerName: string }) {
-  /* ===== Sprite config — tweak for your sheet ===== */
-  const SPRITE_URL = "/duck-sprite.png"; // your PNG sheet
-  const FRAME_W = 64;                    // width of ONE frame (px)
-  const FRAME_H = 48;                    // height of ONE frame (px)
-  const FRAMES_ALIVE = 6;                // how many frames across for the flying row
-  const ROW_ALIVE = 0;                   // row index for flying animation (0 = first row)
-  const ROW_DEAD = 3;                    // row index for “shot/falling” pose
+  /* ===== Sprite sheet config — tuned for your uploaded image =====
+     Each row = a duck color. 6 columns total:
+     [0..3]=flying, 4=shot/falling, 5=dead.
+     If your frame is not exactly 64x64, adjust FRAME_W/FRAME_H.
+  */
+  const SPRITE_URL = "/duck-sprite.png"; // put the file in /public
+  const FRAME_W = 64;                     // ONE frame width (px)
+  const FRAME_H = 64;                     // ONE frame height (px)
+  const COLS = 6;                         // frames across in the sheet
+  const ROWS = 6;                         // how many color rows exist (guess 6 from your image; adjust if needed)
+  const ALIVE_FRAMES = 4;                 // 0..3 are flapping frames
+  const SHOT_COL = 4;                     // column index for "shot/falling"
+  const DEAD_COL = 5;                     // column index for "dead on ground"
 
   /* ===== Game config ===== */
   type DiffKey = "easy" | "medium" | "hard";
@@ -227,16 +233,15 @@ function AimGame({ playerName }: { playerName: string }) {
     rot: number;
     state: DuckState;
     face: 1 | -1;
-    deadAt?: number; // timestamp when landed, for respawn timer
+    row: number;       // sprite row (color)
+    deadAt?: number;
   };
 
   const DUCK_W = FRAME_W;
   const DUCK_H = FRAME_H;
-  const STRIP_W = FRAME_W * FRAMES_ALIVE;
-
   const DURATION = 15;
   const GRAVITY = 650;
-  const RESPAWN_MS = 200; // delay after a duck lands before respawn
+  const RESPAWN_MS = 200;
 
   const DIFF: Record<DiffKey, { ducks: number; speedMin: number; speedMax: number; mult: number }> = {
     easy:   { ducks: 4, speedMin: 70,  speedMax: 120, mult: 1.0 },
@@ -244,25 +249,10 @@ function AimGame({ playerName }: { playerName: string }) {
     hard:   { ducks: 9, speedMin: 150, speedMax: 230, mult: 1.25 },
   };
 
-  /* ===== Background (gradient fallback; you can also add /forest.svg) ===== */
+  /* Background (soft sky fallback) */
   const FOREST_BG = "linear-gradient(180deg,#cfe9ff 0%,#eaf7ff 70%)";
   const FOREST_IMG = "/forest-bg.png"; // optional; ignore if you don’t have it
-
-  /* ===== Minimal inline strip as ultimate fallback ===== */
-  const DUCK_STRIP_INLINE =
-    'data:image/svg+xml;utf8,' +
-    encodeURIComponent(`
-<svg xmlns="http://www.w3.org/2000/svg" width="${STRIP_W}" height="${DUCK_H}" viewBox="0 0 ${STRIP_W} ${DUCK_H}">
-  <defs><linearGradient id="b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f9c74f"/><stop offset="1" stop-color="#f8961e"/></linearGradient></defs>
-  ${Array.from({length: FRAMES_ALIVE}, (_,i)=>`
-    <g transform="translate(${i*DUCK_W},0)">
-      <ellipse cx="38" cy="28" rx="20" ry="12" fill="url(#b)" stroke="#e99e23" stroke-width="1"/>
-      <circle cx="20" cy="20" r="8.5" fill="#f9c74f" stroke="#e99e23" stroke-width="1"/>
-      <circle cx="22.5" cy="18.5" r="1.8" fill="#222"/>
-      <path d="M13 20 L7 18 L7 22 Z" fill="#f3722c"/>
-    </g>`).join("")}
-</svg>`);
-
+  
   /* ===== State ===== */
   const [difficulty, setDifficulty] = React.useState<DiffKey>("medium");
   const [active, setActive] = React.useState(false);
@@ -279,20 +269,21 @@ function AimGame({ playerName }: { playerName: string }) {
   const lastTsRef = React.useRef<number>(0);
   const submittedRef = React.useRef(false);
 
-  /* ===== Tiny SFX ===== */
+  /* Tiny SFX */
   const audioRef = React.useRef<AudioContext | null>(null);
-  const ctx = () => (audioRef.current ??= new (window.AudioContext || (window as any).webkitAudioContext)());
+  const ctx = () =>
+    (audioRef.current ??= new (window.AudioContext || (window as any).webkitAudioContext)());
   function beep(f:number, ms=90, v=0.15){ try{ const ac=ctx(); const o=ac.createOscillator(); const g=ac.createGain(); o.type="square"; o.frequency.value=f; g.gain.value=v; o.connect(g); g.connect(ac.destination); o.start(); setTimeout(()=>{o.stop(); o.disconnect(); g.disconnect();}, ms);}catch{} }
   const hitSfx = (p=0)=>beep(680+p,70,.18);
   const missSfx = ()=>beep(180,110,.10);
   const quackSfx = ()=>beep(520,70,.14);
 
-  /* ===== Utils ===== */
-  const rand = (a:number,b:number)=> a + Math.random()*(b-a);
-  const measure = () => {
+  /* Helpers */
+  const rand=(a:number,b:number)=>a+Math.random()*(b-a);
+  function measure() {
     const el = arenaRef.current; if (!el) return {w:0,h:0};
     return { w: el.clientWidth, h: el.clientHeight };
-  };
+  }
 
   function makeDuck(id:number,w:number,h:number): Duck {
     const { speedMin, speedMax } = DIFF[difficulty];
@@ -301,10 +292,10 @@ function AimGame({ playerName }: { playerName: string }) {
     const sp = rand(speedMin, speedMax);
     const ang = rand(-Math.PI*0.35, Math.PI*0.35);
     const face: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
-    return { id, x, y, vx: Math.cos(ang)*sp*face, vy: Math.sin(ang)*sp*0.35, rot: 0, state: "alive", face };
+    const row = Math.floor(Math.random() * ROWS); // pick a random color row
+    return { id, x, y, vx: Math.cos(ang)*sp*face, vy: Math.sin(ang)*sp*0.35, rot: 0, state: "alive", face, row };
   }
 
-  /* Spawn (after layout) */
   function spawn(retry=0) {
     const { w, h } = measure();
     if (w < DUCK_W*2 || h < DUCK_H*2) {
@@ -320,7 +311,7 @@ function AimGame({ playerName }: { playerName: string }) {
     setDucks(Array.from({length:N},(_,i)=>makeDuck(i+1,w,h)));
   }
 
-  /* Animation */
+  /* RAF loop */
   const tick = (ts:number) => {
     if (!active) return;
     if (!lastTsRef.current) lastTsRef.current = ts;
@@ -331,33 +322,31 @@ function AimGame({ playerName }: { playerName: string }) {
     const W = w || 600, H = h || 260, groundY = H - DUCK_H/2;
 
     setDucks(prev => prev.map(d => {
-      let {x,y,vx,vy,rot,state,face,deadAt} = d;
+      let {x,y,vx,vy,rot,state,face,deadAt,row} = d;
 
       if (state === "alive") {
         x += vx*dt; y += vy*dt;
-        if (x <= DUCK_W/2)        { x = DUCK_W/2;          vx = Math.abs(vx);  face = 1; }
-        if (x >= W - DUCK_W/2)    { x = W - DUCK_W/2;      vx = -Math.abs(vx); face = -1; }
-        if (y <= DUCK_H/2)        { y = DUCK_H/2;          vy = Math.abs(vy)*0.6; }
-        if (y >= H*0.7)           { y = H*0.7;             vy = -Math.abs(vy)*0.6; }
+        if (x <= DUCK_W/2)     { x = DUCK_W/2;     vx = Math.abs(vx);  face = 1; }
+        if (x >= W - DUCK_W/2) { x = W - DUCK_W/2; vx = -Math.abs(vx); face = -1; }
+        if (y <= DUCK_H/2)     { y = DUCK_H/2;     vy = Math.abs(vy)*0.6; }
+        if (y >= H*0.7)        { y = H*0.7;        vy = -Math.abs(vy)*0.6; }
 
       } else if (state === "falling") {
         vy += GRAVITY*dt; y += vy*dt; rot += 360*dt*.8;
         if (y >= groundY) { y = groundY; vy = 0; vx = 0; state = "dead"; deadAt = performance.now(); }
       } else if (state === "dead") {
-        // respawn after short delay
         if (deadAt && performance.now() - deadAt >= RESPAWN_MS && active) {
           const { w, h } = measure();
           return makeDuck(d.id, w || 600, h || 260);
         }
       }
 
-      return { ...d, x, y, vx, vy, rot, state, face, deadAt };
+      return { ...d, x, y, vx, vy, rot, state, face, deadAt, row };
     }));
 
     rafRef.current = requestAnimationFrame(tick);
   };
 
-  /* Start/stop RAF on active */
   React.useEffect(() => {
     if (!active) return;
     lastTsRef.current = 0;
@@ -404,8 +393,7 @@ function AimGame({ playerName }: { playerName: string }) {
       const next=c+1; setBestCombo(b=>Math.max(b,next));
       const mult=DIFF[difficulty].mult; const comboBonus=1+next*0.10;
       setScore(s=>Number((s + 1*mult*comboBonus).toFixed(2)));
-      hitSfx(Math.min(300,next*18)); quackSfx();
-      return next;
+      hitSfx(Math.min(300,next*18)); quackSfx(); return next;
     });
   }
 
@@ -413,8 +401,12 @@ function AimGame({ playerName }: { playerName: string }) {
   return (
     <div className="border rounded-2xl p-4">
       <style>{`
-        @keyframes duckFlap { from{background-position:0 -${ROW_ALIVE*FRAME_H}px;} to{background-position:-${STRIP_W}px -${ROW_ALIVE*FRAME_H}px;} }
-        .duck-anim { animation: duckFlap .42s steps(${FRAMES_ALIVE}) infinite; }
+        /* Animate frames 0..3 horizontally on the chosen row */
+        @keyframes duckFlap {
+          from { background-position: 0 0; }
+          to   { background-position: -${FRAME_W * ALIVE_FRAMES}px 0; }
+        }
+        .duck-anim { animation: duckFlap .42s steps(${ALIVE_FRAMES}) infinite; }
         .duck-stop { animation: none !important; }
       `}</style>
 
@@ -445,12 +437,7 @@ function AimGame({ playerName }: { playerName: string }) {
         ref={arenaRef}
         onClick={onArenaClick}
         className="relative h-64 rounded-2xl overflow-hidden select-none"
-        style={{
-          background: FOREST_BG,
-          backgroundImage: `url(${FOREST_IMG}), ${FOREST_BG}`,
-          backgroundSize: "cover, cover",
-          backgroundPosition: "center, center"
-        }}
+        style={{ background: FOREST_BG }}
       >
         {active && (
           <div className="absolute top-2 right-2 bg-white/90 text-slate-900 text-xs font-semibold px-2 py-1 rounded-md z-[1]">
@@ -466,7 +453,20 @@ function AimGame({ playerName }: { playerName: string }) {
         {/* Ducks */}
         {ducks.map(d=>{
           const falling = d.state !== "alive";
-          const rowY = (falling ? ROW_DEAD : ROW_ALIVE) * FRAME_H;
+
+          // Y offset selects the row (each row is FRAME_H tall)
+          const rowY = -d.row * FRAME_H;
+
+          // Freeze to SHOT/DEAD column when not alive
+          const frozenX =
+            d.state === "falling" ? -(SHOT_COL * FRAME_W)
+            : d.state === "dead" ? -(DEAD_COL * FRAME_W)
+            : 0;
+
+          // For alive ducks we let CSS steps animate columns 0..3,
+          // so we set X=0 here; the keyframes will move it.
+          const bgPos = falling ? `${frozenX}px ${rowY}px` : `0px ${rowY}px`;
+
           return (
             <button
               key={d.id}
@@ -479,13 +479,10 @@ function AimGame({ playerName }: { playerName: string }) {
                 zIndex: 2, display: "block",
                 transform: `translate3d(${d.x - DUCK_W/2}px, ${d.y - DUCK_H/2}px, 0) scaleX(${d.face}) rotate(${d.rot}deg)`,
                 transformOrigin: "center",
-                // Try your sprite sheet first, then inline fallback
-                backgroundImage: `url(${SPRITE_URL}), url(${DUCK_STRIP_INLINE})`,
-                // First layer is row strip (FRAMES_ALIVE * FRAME_W by FRAME_H), second is inline strip
-                backgroundSize: `${STRIP_W}px ${FRAME_H}px, ${STRIP_W}px ${FRAME_H}px`,
-                backgroundRepeat: "no-repeat, no-repeat",
-                // Y offset selects the row. For the inline fallback (single row), Y=0 is fine.
-                backgroundPosition: `0px -${rowY}px, 0px 0px`,
+                backgroundImage: `url(${SPRITE_URL})`,
+                backgroundSize: `${COLS * FRAME_W}px ${ROWS * FRAME_H}px`,
+                backgroundRepeat: "no-repeat",
+                backgroundPosition: bgPos,
                 backgroundColor: "#f59e0b20",
               }}
               title="quack!"
@@ -495,15 +492,26 @@ function AimGame({ playerName }: { playerName: string }) {
       </div>
 
       <div className="grid grid-cols-4 gap-4 mt-4">
-        <div className="rounded-xl bg-slate-100 p-4 text-center"><div className="text-slate-500 text-sm">Hits</div><div className="text-2xl font-bold">{hits}</div></div>
-        <div className="rounded-xl bg-slate-100 p-4 text-center"><div className="text-slate-500 text-sm">Misses</div><div className="text-2xl font-bold">{misses}</div></div>
-        <div className="rounded-xl bg-slate-100 p-4 text-center"><div className="text-slate-500 text-sm">Combo</div><div className="text-2xl font-bold">{combo} <span className="text-sm text-slate-500">best {bestCombo}</span></div></div>
-        <div className="rounded-xl bg-slate-100 p-4 text-center"><div className="text-slate-500 text-sm">Score</div><div className="text-2xl font-bold">{score.toFixed(2)}</div></div>
+        <div className="rounded-xl bg-slate-100 p-4 text-center">
+          <div className="text-slate-500 text-sm">Hits</div>
+          <div className="text-2xl font-bold">{hits}</div>
+        </div>
+        <div className="rounded-xl bg-slate-100 p-4 text-center">
+          <div className="text-slate-500 text-sm">Misses</div>
+          <div className="text-2xl font-bold">{misses}</div>
+        </div>
+        <div className="rounded-xl bg-slate-100 p-4 text-center">
+          <div className="text-slate-500 text-sm">Combo</div>
+          <div className="text-2xl font-bold">{combo} <span className="text-sm text-slate-500">best {bestCombo}</span></div>
+        </div>
+        <div className="rounded-xl bg-slate-100 p-4 text-center">
+          <div className="text-slate-500 text-sm">Score</div>
+          <div className="text-2xl font-bold">{score.toFixed(2)}</div>
+        </div>
       </div>
     </div>
   );
 }
-
 
 /* --------------------------- Main --------------------------- */
 export default function SpeedRushArena() {
