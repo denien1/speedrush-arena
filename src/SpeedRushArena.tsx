@@ -208,9 +208,9 @@ function TypingGame({ playerName }: { playerName: string }) {
   );
 }
 
-/* --------------------------- Aim (robust spawn + sprite + forest) --------------------------- */
+/* --------------------------- Aim Trainer (moving ducks + reliable spawn) --------------------------- */
 function AimGame({ playerName }: { playerName: string }) {
-  // -------- Types
+  // Types
   type DiffKey = "easy" | "medium" | "hard";
   type DuckState = "alive" | "falling" | "dead";
   type Duck = {
@@ -224,54 +224,31 @@ function AimGame({ playerName }: { playerName: string }) {
     face: 1 | -1;
   };
 
-  // -------- Background (forest)
-  const FOREST_BG =
-    'data:image/svg+xml;utf8,' +
-    encodeURIComponent(`
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="480">
-  <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#cfe9ff"/>
-      <stop offset="100%" stop-color="#eaf7ff"/>
-    </linearGradient>
-    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#bfe3a3"/>
-      <stop offset="100%" stop-color="#9ed37e"/>
-    </linearGradient>
-  </defs>
-  <rect width="100%" height="70%" fill="url(#sky)"/>
-  <circle cx="200" cy="110" r="55" fill="#fff3b0" opacity=".85"/>
-  <g opacity=".35" fill="#8fb3cc">
-    <path d="M0 260 L140 120 L260 260 Z"/>
-    <path d="M220 260 L380 130 L520 260 Z"/>
-    <path d="M500 260 L700 120 L880 260 Z"/>
-    <path d="M820 260 L980 135 L1200 260 Z"/>
-  </g>
-  <g opacity=".55" fill="#6aa04f">
-    <path d="M80 260 l20 -85 l20 85 Z"/><rect x="98" y="260" width="4" height="30"/>
-    <path d="M240 260 l22 -90 l22 90 Z"/><rect x="261" y="260" width="4" height="30"/>
-    <path d="M420 260 l20 -80 l20 80 Z"/><rect x="438" y="260" width="4" height="30"/>
-    <path d="M620 260 l24 -95 l24 95 Z"/><rect x="642" y="260" width="4" height="30"/>
-    <path d="M860 260 l22 -88 l22 88 Z"/><rect x="881" y="260" width="4" height="30"/>
-    <path d="M1040 260 l20 -84 l20 84 Z"/><rect x="1058" y="260" width="4" height="30"/>
-  </g>
-  <rect y="70%" width="100%" height="30%" fill="url(#ground)"/>
-  <g opacity=".7" fill="#6db24a">
-    <ellipse cx="160" cy="340" rx="90" ry="22"/>
-    <ellipse cx="360" cy="348" rx="120" ry="24"/>
-    <ellipse cx="680" cy="338" rx="110" ry="22"/>
-    <ellipse cx="960" cy="350" rx="130" ry="26"/>
-  </g>
-</svg>
-`);
-
-  // -------- Duck filmstrip (4 frames, 64x48 each; steps animation)
+  // Config
   const DUCK_W = 64;
   const DUCK_H = 48;
   const FRAMES = 4;
   const STRIP_W = DUCK_W * FRAMES;
+  const DURATION = 15;
+  const GRAVITY = 650;
 
-  const DUCK_STRIP =
+  const DIFF: Record<DiffKey, { ducks: number; speedMin: number; speedMax: number; mult: number }> = {
+    easy:   { ducks: 4, speedMin: 70,  speedMax: 120, mult: 1.0 },
+    medium: { ducks: 6, speedMin: 100, speedMax: 180, mult: 1.1 },
+    hard:   { ducks: 9, speedMin: 150, speedMax: 230, mult: 1.25 },
+  };
+
+  // Assets
+  // If you later add /duck.png (4 frames strip 256x48) and /forest.svg to /public,
+  // these will load automatically; otherwise fallbacks below still work.
+  const PNG_STRIP = "/duck.png";
+  const FOREST_IMG = "/forest.svg";
+
+  const FOREST_BG_FALLBACK =
+    "linear-gradient(180deg,#cfe9ff 0%,#eaf7ff 70%)";
+
+  // Minimal inline SVG filmstrip (fallback if /duck.png not present)
+  const DUCK_STRIP_INLINE =
     'data:image/svg+xml;utf8,' +
     encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="${STRIP_W}" height="${DUCK_H}" viewBox="0 0 ${STRIP_W} ${DUCK_H}">
@@ -281,60 +258,20 @@ function AimGame({ playerName }: { playerName: string }) {
       <stop offset="1" stop-color="#f8961e"/>
     </linearGradient>
   </defs>
+  ${[0,1,2,3].map(i => `
+    <g transform="translate(${i*DUCK_W},0)">
+      <ellipse cx="38" cy="28" rx="20" ry="12" fill="url(#body)" stroke="#e99e23" stroke-width="1"/>
+      <circle cx="20" cy="20" r="8.5" fill="#f9c74f" stroke="#e99e23" stroke-width="1"/>
+      <circle cx="22.5" cy="18.5" r="1.8" fill="#222"/>
+      <path d="M13 20 L7 18 L7 22 Z" fill="#f3722c"/>
+      <path d="M54 25 l8 -5 v10 z" fill="#f9844a"/>
+      <ellipse cx="34" cy="${i===2?21.5:i===0?26:24.5}" rx="${i===2?8.2:i===0?11:9.5}" ry="${i===2?4.2:i===0?6.5:5.4}" fill="#f48c06" opacity=".95"/>
+      <ellipse cx="42" cy="${i===2?25:i===0?29:28}" rx="${i===2?7.8:i===0?10:8.8}" ry="${i===2?4:i===0?6:5}" fill="#f48c06" opacity=".75"/>
+    </g>
+  `).join("")}
+</svg>`);
 
-  <!-- frame 1 -->
-  <g transform="translate(0,0)">
-    <ellipse cx="38" cy="28" rx="20" ry="12" fill="url(#body)" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="20" cy="20" r="8.5" fill="#f9c74f" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="22.5" cy="18.5" r="1.8" fill="#222"/>
-    <path d="M13 20 L7 18 L7 22 Z" fill="#f3722c"/>
-    <path d="M54 25 l8 -5 v10 z" fill="#f9844a"/>
-    <ellipse cx="34" cy="26" rx="11" ry="6.5" fill="#f48c06" opacity=".95"/>
-    <ellipse cx="42" cy="29" rx="10" ry="6" fill="#f48c06" opacity=".75"/>
-  </g>
-  <!-- frame 2 -->
-  <g transform="translate(${DUCK_W},0)">
-    <ellipse cx="38" cy="28" rx="20" ry="12" fill="url(#body)" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="20" cy="20" r="8.5" fill="#f9c74f" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="22.5" cy="18.5" r="1.8" fill="#222"/>
-    <path d="M13 20 L7 18 L7 22 Z" fill="#f3722c"/>
-    <path d="M54 25 l8 -5 v10 z" fill="#f9844a"/>
-    <ellipse cx="34" cy="24.5" rx="9.5" ry="5.4" fill="#f48c06" opacity=".95"/>
-    <ellipse cx="42" cy="28" rx="8.8" ry="5" fill="#f48c06" opacity=".75"/>
-  </g>
-  <!-- frame 3 -->
-  <g transform="translate(${DUCK_W * 2},0)">
-    <ellipse cx="38" cy="28" rx="20" ry="12" fill="url(#body)" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="20" cy="20" r="8.5" fill="#f9c74f" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="22.5" cy="18.5" r="1.8" fill="#222"/>
-    <path d="M13 20 L7 18 L7 22 Z" fill="#f3722c"/>
-    <path d="M54 25 l8 -5 v10 z" fill="#f9844a"/>
-    <ellipse cx="34" cy="21.5" rx="8.2" ry="4.2" fill="#f48c06" opacity=".95"/>
-    <ellipse cx="42" cy="25" rx="7.8" ry="4" fill="#f48c06" opacity=".75"/>
-  </g>
-  <!-- frame 4 -->
-  <g transform="translate(${DUCK_W * 3},0)">
-    <ellipse cx="38" cy="28" rx="20" ry="12" fill="url(#body)" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="20" cy="20" r="8.5" fill="#f9c74f" stroke="#e99e23" stroke-width="1"/>
-    <circle cx="22.5" cy="18.5" r="1.8" fill="#222"/>
-    <path d="M13 20 L7 18 L7 22 Z" fill="#f3722c"/>
-    <path d="M54 25 l8 -5 v10 z" fill="#f9844a"/>
-    <ellipse cx="34" cy="24.5" rx="9.5" ry="5.4" fill="#f48c06" opacity=".95"/>
-    <ellipse cx="42" cy="28" rx="8.8" ry="5" fill="#f48c06" opacity=".75"/>
-  </g>
-</svg>
-`);
-
-  // -------- Difficulty & physics
-  const DIFF: Record<DiffKey, { ducks: number; speedMin: number; speedMax: number; mult: number }> = {
-    easy:   { ducks: 4, speedMin: 70,  speedMax: 120, mult: 1.0 },
-    medium: { ducks: 6, speedMin: 100, speedMax: 180, mult: 1.1 },
-    hard:   { ducks: 9, speedMin: 150, speedMax: 230, mult: 1.25 },
-  };
-  const DURATION = 15;
-  const GRAVITY = 650;
-
-  // -------- State
+  // State
   const [difficulty, setDifficulty] = React.useState<DiffKey>("medium");
   const [active, setActive] = React.useState(false);
   const [left, setLeft] = React.useState(DURATION);
@@ -350,158 +287,141 @@ function AimGame({ playerName }: { playerName: string }) {
   const lastTsRef = React.useRef<number>(0);
   const submittedRef = React.useRef(false);
 
-  // -------- SFX (small + safe)
+  // Simple SFX
   const audioRef = React.useRef<AudioContext | null>(null);
-  function ctx() { return (audioRef.current ??= new (window.AudioContext || (window as any).webkitAudioContext)()); }
-  function beep(freq: number, durMs = 90, vol = 0.15) { try{const ac=ctx(); const o=ac.createOscillator(); const g=ac.createGain(); o.type="square"; o.frequency.value=freq; g.gain.value=vol; o.connect(g); g.connect(ac.destination); o.start(); setTimeout(()=>{o.stop();o.disconnect();g.disconnect();}, durMs);}catch{} }
-  function quackSfx(){ try{const ac=ctx(); const o=ac.createOscillator(); const g=ac.createGain(); o.type="square"; o.frequency.setValueAtTime(520,ac.currentTime); o.frequency.exponentialRampToValueAtTime(330,ac.currentTime+0.12); g.gain.value=.16; o.connect(g); g.connect(ac.destination); o.start(); setTimeout(()=>{o.stop();o.disconnect();g.disconnect();},140);}catch{} }
+  const ctx = () =>
+    (audioRef.current ??= new (window.AudioContext || (window as any).webkitAudioContext)());
+  function beep(f: number, ms = 90, v = 0.15) {
+    try {
+      const ac = ctx(); const o = ac.createOscillator(); const g = ac.createGain();
+      o.type = "square"; o.frequency.value = f; g.gain.value = v;
+      o.connect(g); g.connect(ac.destination); o.start();
+      setTimeout(() => { o.stop(); o.disconnect(); g.disconnect(); }, ms);
+    } catch {}
+  }
   const hitSfx = (p=0)=>beep(680+p,70,.18);
   const missSfx = ()=>beep(180,110,.10);
+  function quackSfx(){ beep(520,70,.14); }
 
-  // -------- Utils
-  const rand=(a:number,b:number)=>a+Math.random()*(b-a);
+  // Utils
+  const rand = (a:number,b:number)=> a + Math.random()*(b-a);
+
+  function measure() {
+    const el = arenaRef.current;
+    if (!el) return { w: 0, h: 0 };
+    return { w: el.clientWidth, h: el.clientHeight };
+  }
 
   function makeDuck(id:number,w:number,h:number): Duck {
     const { speedMin, speedMax } = DIFF[difficulty];
     const x = rand(DUCK_W/2, Math.max(DUCK_W/2, w - DUCK_W/2));
     const y = rand(DUCK_H/2 + 8, Math.max(DUCK_H/2 + 8, h * 0.65));
     const sp = rand(speedMin, speedMax);
-    const ang = rand(-Math.PI*0.3, Math.PI*0.3);
+    const ang = rand(-Math.PI*0.35, Math.PI*0.35);
     const face: 1 | -1 = Math.random() < 0.5 ? 1 : -1;
     return { id, x, y, vx: Math.cos(ang)*sp*face, vy: Math.sin(ang)*sp*0.35, rot: 0, state: "alive", face };
   }
 
-  // --- robust measurement + spawn (the core fix)
-  function measureArena() {
-    const el = arenaRef.current;
-    if (!el) return { w: 0, h: 0 };
-    return { w: el.clientWidth, h: el.clientHeight };
-  }
-
-  function spawnDucks(retryCount = 0) {
-    const { w, h } = measureArena();
-
-    // If layout isn't ready yet, retry a few frames
-    if (w < DUCK_W * 2 || h < DUCK_H * 2) {
-      if (retryCount > 10) {
+  function spawn(retry=0) {
+    const { w, h } = measure();
+    if (w < DUCK_W*2 || h < DUCK_H*2) {
+      if (retry > 10) {
         const N = DIFF[difficulty].ducks;
-        setDucks(Array.from({ length: N }, (_, i) => makeDuck(i + 1, 600, 260))); // last-resort defaults
+        setDucks(Array.from({length:N}, (_,i)=>makeDuck(i+1, 600, 260)));
         return;
       }
-      requestAnimationFrame(() => spawnDucks(retryCount + 1));
+      requestAnimationFrame(()=>spawn(retry+1));
       return;
     }
-
     const N = DIFF[difficulty].ducks;
-    setDucks(Array.from({ length: N }, (_, i) => makeDuck(i + 1, w, h)));
+    setDucks(Array.from({length:N}, (_,i)=>makeDuck(i+1, w, h)));
   }
 
-  // -------- lifecycle
   function start() {
     setHits(0); setMisses(0); setScore(0); setCombo(0); setBestCombo(0);
     setLeft(DURATION); setActive(true); submittedRef.current = false;
     lastTsRef.current = 0;
 
-    // Wait 2 frames to guarantee layout, then spawn + start loop
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        spawnDucks(0);
-        cancelAnimationFrame(rafRef.current!);
-        rafRef.current = requestAnimationFrame(tick);
-      });
-    });
+    // Wait two frames to guarantee layout, then spawn + start loop.
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{
+      spawn(0);
+      cancelAnimationFrame(rafRef.current!);
+      rafRef.current = requestAnimationFrame(tick);
+    }));
   }
 
   async function finish() {
     if (submittedRef.current) return;
     const value = Number(hits.toFixed(2));
-    if (value > 0) {
-      await submitIfValid(playerName, "aim", value);
-      submittedRef.current = true;
-    }
+    if (value > 0) { await submitIfValid(playerName, "aim", value); }
+    submittedRef.current = true;
     setActive(false);
     cancelAnimationFrame(rafRef.current!);
   }
 
-  const tick = (ts: number) => {
+  // Movement loop (transform translate3d; much smoother than left/top)
+  const tick = (ts:number) => {
     if (!active) return;
     if (!lastTsRef.current) lastTsRef.current = ts;
-    const dt = (ts - lastTsRef.current) / 1000;
+    const dt = Math.max(0, Math.min((ts - lastTsRef.current)/1000, 0.05)); // clamp dt
     lastTsRef.current = ts;
 
-    const { w, h } = measureArena();
-    const groundY = (h || 260) - DUCK_H / 2;
+    const { w, h } = measure();
+    const W = w || 600, H = h || 260, groundY = H - DUCK_H/2;
 
     setDucks(prev => prev.map(d => {
-      let { x, y, vx, vy, rot, state, face } = d;
-
+      let {x,y,vx,vy,rot,state,face} = d;
       if (state === "alive") {
-        x += vx * dt;
-        y += vy * dt;
-
-        if (x <= DUCK_W / 2) { x = DUCK_W / 2; vx = Math.abs(vx); face = 1; }
-        else if (x >= (w || 600) - DUCK_W / 2) { x = (w || 600) - DUCK_W / 2; vx = -Math.abs(vx); face = -1; }
-
-        if (y <= DUCK_H / 2) { y = DUCK_H / 2; vy = Math.abs(vy) * 0.6; }
-        else if (y >= (h || 260) * 0.7) { y = (h || 260) * 0.7; vy = -Math.abs(vy) * 0.6; }
+        x += vx*dt;
+        y += vy*dt;
+        if (x <= DUCK_W/2) { x = DUCK_W/2; vx = Math.abs(vx); face = 1; }
+        if (x >= W - DUCK_W/2) { x = W - DUCK_W/2; vx = -Math.abs(vx); face = -1; }
+        if (y <= DUCK_H/2) { y = DUCK_H/2; vy = Math.abs(vy)*0.6; }
+        if (y >= H*0.7) { y = H*0.7; vy = -Math.abs(vy)*0.6; }
       } else if (state === "falling") {
-        vy += GRAVITY * dt;
-        y += vy * dt;
-        rot += 360 * dt * 0.8;
+        vy += GRAVITY*dt; y += vy*dt; rot += 360*dt*.8;
         if (y >= groundY) { y = groundY; vy = 0; vx = 0; state = "dead"; }
       }
-
-      return { ...d, x, y, vx, vy, rot, state, face };
+      return {...d,x,y,vx,vy,rot,state,face};
     }));
 
     rafRef.current = requestAnimationFrame(tick);
   };
 
+  // Timer + cleanup
   React.useEffect(() => {
     if (!active) return;
     if (left <= 0) { finish(); return; }
-    const t = setTimeout(() => setLeft(s => s - 1), 1000);
-    return () => clearTimeout(t);
+    const t = setTimeout(()=>setLeft(s=>s-1), 1000);
+    return ()=>clearTimeout(t);
   }, [active, left]);
 
-  React.useEffect(() => () => cancelAnimationFrame(rafRef.current!), []);
-  React.useEffect(() => { if (!active) spawnDucks(); }, [difficulty]);
+  React.useEffect(()=>()=>cancelAnimationFrame(rafRef.current!), []);
+  React.useEffect(()=>{ if (!active) spawn(0); }, [difficulty]);
 
-  // -------- clicks
+  // Clicks
   function onArenaClick() {
     if (!active) return;
-    setMisses(m => m + 1);
-    setCombo(0);
-    missSfx();
+    setMisses(m=>m+1); setCombo(0); missSfx();
   }
-
-  function onDuckClick(e: React.MouseEvent, id: number) {
-    e.stopPropagation();
-    if (!active) return;
-
-    setDucks(prev => prev.map(d => (d.id === id && d.state === "alive" ? { ...d, state: "falling", vy: -140 } : d)));
-    setHits(h => h + 1);
-    setCombo(c => {
-      const next = c + 1;
-      setBestCombo(b => Math.max(b, next));
-      const mult = DIFF[difficulty].mult;
-      const comboBonus = 1 + next * 0.10;
-      const gain = 1 * mult * comboBonus;
-      setScore(s => Number((s + gain).toFixed(2)));
-      hitSfx(Math.min(300, next * 18));
-      quackSfx();
-      return next;
+  function onDuckClick(e:React.MouseEvent,id:number) {
+    e.stopPropagation(); if (!active) return;
+    setDucks(prev=>prev.map(d=> d.id===id && d.state==="alive" ? {...d,state:"falling",vy:-140} : d));
+    setHits(h=>h+1);
+    setCombo(c=>{
+      const next=c+1; setBestCombo(b=>Math.max(b,next));
+      const mult=DIFF[difficulty].mult; const comboBonus=1+next*0.10;
+      setScore(s=>Number((s + 1*mult*comboBonus).toFixed(2)));
+      hitSfx(Math.min(300,next*18)); quackSfx(); return next;
     });
   }
 
-  // -------- UI
+  // UI
   return (
     <div className="border rounded-2xl p-4">
+      {/* sprite animation */}
       <style>{`
-        @keyframes duckFlap {
-          from { background-position: 0 0; }
-          to   { background-position: -${STRIP_W}px 0; }
-        }
+        @keyframes duckFlap { from{background-position:0 0;} to{background-position:-${STRIP_W}px 0;} }
         .duck-anim { animation: duckFlap .42s steps(${FRAMES}) infinite; }
         .duck-stop { animation: none !important; }
       `}</style>
@@ -511,15 +431,13 @@ function AimGame({ playerName }: { playerName: string }) {
 
       <div className="flex items-center gap-2 mb-3">
         <span className="text-sm text-slate-600 mr-1">Difficulty:</span>
-        {(["easy","medium","hard"] as DiffKey[]).map(key => (
-          <button
-            key={key}
-            className={`px-3 py-1 rounded ${difficulty === key ? "bg-slate-900 text-white" : "bg-slate-100"}`}
-            onClick={() => !active && setDifficulty(key)}
+        {(["easy","medium","hard"] as DiffKey[]).map(k=>(
+          <button key={k}
+            className={`px-3 py-1 rounded ${difficulty===k? "bg-slate-900 text-white":"bg-slate-100"}`}
+            onClick={()=>!active && setDifficulty(k)}
             disabled={active}
-            title={`×${DIFF[key].mult.toFixed(2)}`}
-          >
-            {key[0].toUpperCase() + key.slice(1)} (×{DIFF[key].mult})
+            title={`×${DIFF[k].mult}`}>
+            {k[0].toUpperCase()+k.slice(1)} (×{DIFF[k].mult})
           </button>
         ))}
         <div className="ml-auto flex items-center gap-2">
@@ -535,7 +453,12 @@ function AimGame({ playerName }: { playerName: string }) {
         ref={arenaRef}
         onClick={onArenaClick}
         className="relative h-64 rounded-2xl overflow-hidden select-none"
-        style={{ backgroundImage: `url(${FOREST_BG})`, backgroundSize: "cover", backgroundPosition: "center" }}
+        style={{
+          background: `${FOREST_BG_FALLBACK}`,
+          backgroundImage: `url(${FOREST_IMG}), ${FOREST_BG_FALLBACK}`,
+          backgroundSize: "cover, cover",
+          backgroundPosition: "center, center"
+        }}
       >
         {active && (
           <div className="absolute top-2 right-2 bg-white/90 text-slate-900 text-xs font-semibold px-2 py-1 rounded-md z-[1]">
@@ -548,31 +471,28 @@ function AimGame({ playerName }: { playerName: string }) {
           </div>
         )}
 
-        {/* Ducks (zIndex:2; visible fallback color) */}
-        {ducks.map(d => {
+        {/* Ducks */}
+        {ducks.map(d=>{
           const falling = d.state !== "alive";
           return (
             <button
               key={d.id}
               aria-label={`duck-${d.id}`}
-              onClick={(e) => onDuckClick(e, d.id)}
-              className={`absolute ${falling ? "duck-stop" : "duck-anim"}`}
+              onClick={(e)=>onDuckClick(e,d.id)}
+              className={`absolute ${falling ? "duck-stop":"duck-anim"}`}
               style={{
-                left: d.x - DUCK_W / 2,
-                top: d.y - DUCK_H / 2,
-                width: DUCK_W,
-                height: DUCK_H,
-                zIndex: 2,
-                display: "block",
-                transform: `scaleX(${d.face}) rotate(${d.rot}deg)`,
+                // 0,0 anchor + translate3d makes animation smooth
+                left: 0, top: 0,
+                width: DUCK_W, height: DUCK_H,
+                zIndex: 2, display: "block",
+                transform: `translate3d(${d.x - DUCK_W/2}px, ${d.y - DUCK_H/2}px, 0) scaleX(${d.face}) rotate(${d.rot}deg)`,
                 transformOrigin: "center",
-                backgroundImage: `url(${DUCK_STRIP})`,
-                backgroundSize: `${STRIP_W}px ${DUCK_H}px`,
-                backgroundRepeat: "no-repeat",
-                backgroundPosition: "0 0",
-                backgroundColor: "#f59e0b20", // fallback so you SEE boxes even if sprite fails
+                backgroundImage: `url(${PNG_STRIP}), url(${DUCK_STRIP_INLINE})`, // try PNG first, then inline fallback
+                backgroundSize: `${STRIP_W}px ${DUCK_H}px, ${STRIP_W}px ${DUCK_H}px`,
+                backgroundRepeat: "no-repeat, no-repeat",
+                backgroundPosition: "0 0, 0 0",
+                backgroundColor: "#f59e0b20" // visible even if image fails
               }}
-              title="quack!"
             />
           );
         })}
