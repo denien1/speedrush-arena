@@ -246,7 +246,7 @@ function AimGame({ playerName }: { playerName: string }) {
 
   /* ===== Background (gradient fallback; you can also add /forest.svg) ===== */
   const FOREST_BG = "linear-gradient(180deg,#cfe9ff 0%,#eaf7ff 70%)";
-  const FOREST_IMG = "/forest.svg"; // optional; ignore if you don’t have it
+  const FOREST_IMG = "/forest-bg.png"; // optional; ignore if you don’t have it
 
   /* ===== Minimal inline strip as ultimate fallback ===== */
   const DUCK_STRIP_INLINE =
