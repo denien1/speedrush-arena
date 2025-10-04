@@ -1,307 +1,527 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { smartShare } from "@/lib/share";
-import { motion, AnimatePresence } from "framer-motion";
-import { Trophy, MousePointerClick, TimerReset, Keyboard, Crosshair, Share2, RefreshCw, Target, Crown, Sparkles, Award, Settings2 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { fetchTop, submitScore, supaReady, type ModeKey } from "@/lib/supabase";
+import AdSlot from "@/components/ui/AdSlot";
+import { smartShare } from "@/lib/share";
+import {
+  fetchTop,
+  submitScore,
+  submitIfValid,
+  supaReady,
+  type ModeKey,
+} from "@/lib/supabase";
 
-const fmt = (n: number, digits = 0) => Number.isFinite(n) ? n.toFixed(digits) : "-";
-const clamp = (n: number, min: number, max: number) => Math.max(min, Math.min(max, n));
+/* ----------------------------------------------------------------------------
+   Utility
+---------------------------------------------------------------------------- */
 
-const sampleWords = `rapid neon pulse vector quantum turbo pixel blaze flux nova hyper ignite bolt drift snap orbit byte flash sonic echo boost apex shift gyro loop ripple quake prism laser ether surge vortex sprite comet spark fractal nano macro micro meta giga zeta zenith alpha bravo delta sigma lambda gamma theta omega atlas titan ember frost ember dune dune azure chrome scarlet cobalt verdant obsidian quartz basalt cedar maple amber lilac velvet satin marble cotton nylon silica lotus falcon jaguar panther lynx cobra viper sparrow eagle raven hawk crane heron lotus river ocean desert jungle arctic polar storm thunder lightning drizzle monsoon cyclone zephyr eclipse aurora nebula halo galaxy cosmos cosmos`.split(" ");
-
-function useLocalStorage<T>(key: string, init: T) {
-  const [val, setVal] = useState<T>(() => {
-    try {
-      const raw = localStorage.getItem(key);
-      return raw ? (JSON.parse(raw) as T) : init;
-    } catch { return init; }
-  });
-  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }, [key, val]);
-  return [val, setVal] as const;
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
 }
 
-function seedFromDate(date = new Date()) {
-  const d = new Date(date.toLocaleDateString("en-CA"));
-  let s = d.getFullYear() * 1_000_000 + (d.getMonth()+1) * 10_000 + d.getDate() * 100 + 73;
-  return s >>> 0;
+function msNow() {
+  return Date.now();
 }
 
-function rng(seedRef: React.MutableRefObject<number>) {
-  let x = seedRef.current || 2463534242; x ^= x << 13; x ^= x >>> 17; x ^= x << 5; seedRef.current = x >>> 0; return (seedRef.current % 1_000_000) / 1_000_000;
-}
+/* ----------------------------------------------------------------------------
+   Leaderboard widget
+---------------------------------------------------------------------------- */
 
-type ScoreRow = { mode: ModeKey; value: number; label: string; ts: number };
+function Leaderboard({
+  mode,
+  title,
+}: {
+  mode: ModeKey;
+  title: string;
+}) {
+  const [rows, setRows] = useState<Array<{ id: number; name: string; value: number }>>([]);
 
-function useLeaderboard() {
-  const [rows, setRows] = useLocalStorage<ScoreRow[]>("speedrush:leaderboard", []);
-  const add = (row: ScoreRow) => setRows(prev => { const next = [...prev, row].sort((a,b) => ranker(a,b)); return next.slice(0,100); });
-  function ranker(a: ScoreRow, b: ScoreRow) {
-    const va = a.mode === "reaction" ? -a.value : a.value; const vb = b.mode === "reaction" ? -b.value : b.value; return vb - va;
+  async function refresh() {
+    const { data } = await fetchTop(mode, 10);
+    setRows((data as any[])?.map((r) => ({ id: r.id, name: r.name, value: r.value })) || []);
   }
-  return { rows, add };
-}
 
-function BadgePill({ children }: { children: React.ReactNode }) { return (<span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-black/5">{children}</span>); }
+  useEffect(() => {
+    refresh();
+  }, [mode]);
 
-function ReactionTest({ onScore }: { onScore: (ms: number) => void }) {
-  const [phase, setPhase] = useState<"idle"|"wait"|"go"|"oops">("idle");
-  const [ms, setMs] = useState<number | null>(null);
-  const tRef = useRef<number>(0); const startRef = useRef<number>(0);
-  function start(){ setMs(null); setPhase("wait"); const delay = 800 + Math.random()*1700; tRef.current = window.setTimeout(()=>{ startRef.current = performance.now(); setPhase("go"); }, delay); }
-  function click(){ if(phase==="wait"){ clearTimeout(tRef.current); setPhase("oops"); setMs(null);} else if(phase==="go"){ const rt = performance.now()-startRef.current; setMs(rt); setPhase("idle"); onScore(rt);} else { start(); } }
-  useEffect(()=>()=>clearTimeout(tRef.current),[]);
   return (
-    <Card className="overflow-hidden">
-      <CardHeader><CardTitle className="flex items-center gap-2"><TimerReset className="h-5 w-5"/>Reaction Time</CardTitle><CardDescription>Click when the card turns green.</CardDescription></CardHeader>
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle className="text-base">{title}</CardTitle>
+      </CardHeader>
       <CardContent>
-        <motion.div onClick={click} className={`h-56 rounded-2xl grid place-items-center cursor-pointer select-none text-white text-2xl font-semibold shadow-inner ${phase==="go"?"bg-green-500":""} ${phase==="wait"?"bg-amber-500":""} ${phase==="idle"||phase==="oops"?"bg-slate-800":""}`} animate={{ scale: phase === "go" ? 1.02 : 1 }} transition={{ type: "spring", stiffness: 260, damping: 18 }}>
-          {phase === "idle" && <div>Tap to start</div>}
-          {phase === "wait" && <div>Wait…</div>}
-          {phase === "go" && <div>GO!</div>}
-          {phase === "oops" && <div>Too early! Tap to retry</div>}
-        </motion.div>
-        <div className="mt-4 flex items-center justify-between"><div className="text-sm text-slate-500">Best human ~120–150 ms</div><div className="text-xl font-bold">{ms? `${fmt(ms,0)} ms` : ""}</div></div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function CPSTest({ onScore }: { onScore: (cps: number) => void }){
-  const DURATION = 5_000; const [running, setRunning] = useState(false); const [clicks, setClicks] = useState(0); const [startAt, setStartAt] = useState<number | null>(null);
-  const left = startAt ? clamp(1 - (performance.now()-startAt)/DURATION, 0, 1) : 0;
-  useEffect(()=>{ if(!running) return; const id = setInterval(()=>{}, 50); return ()=>clearInterval(id); },[running]);
-  function tap(){ if(!running){ setRunning(true); setClicks(1); setStartAt(performance.now()); setTimeout(()=>{ setRunning(false); const cps = clicks/(DURATION/1000); onScore(cps); }, DURATION); } else { setClicks(c=>c+1);} }
-  const cpsLive = running && startAt ? clicks / ((performance.now()-startAt)/1000) : 0;
-  return (
-    <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><MousePointerClick className="h-5 w-5"/>Clicks Per Second</CardTitle><CardDescription>How fast can you click in 5 seconds?</CardDescription></CardHeader>
-      <CardContent>
-        <motion.button onClick={tap} className="w-full h-48 rounded-2xl grid place-items-center text-3xl font-bold bg-gradient-to-br from-slate-800 to-slate-900 text-white shadow active:scale-[.99]" whileTap={{ scale: 0.98 }}>{running? "CLICK!" : "Start"}</motion.button>
-        <div className="mt-4"><Progress value={(1-left)*100} /><div className="mt-2 flex items-center justify-between text-sm text-slate-500"><span>{running? `${fmt(cpsLive,2)} cps` : ""}</span><span>{running? `${(left*5).toFixed(1)}s left` : `${clicks} clicks`}</span></div></div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function TypingTest({ onScore }: { onScore: (wpm: number) => void }){
-  const DURATION = 30_000; const [text, setText] = useState(""); const [target, setTarget] = useState<string[]>([]); const [startedAt, setStartedAt] = useState<number | null>(null); const [wpm, setWpm] = useState(0); const [acc, setAcc] = useState(100); const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(()=>{ reset(); },[]);
-  function reset(){ const words = Array.from({length: 45}, () => sampleWords[Math.floor(Math.random()*sampleWords.length)]); setTarget(words); setText(""); setStartedAt(null); setWpm(0); setAcc(100); inputRef.current?.focus(); }
-  useEffect(()=>{ if(!startedAt) return; const id = setInterval(()=> setWpm(calcWpm(text, startedAt)), 200); const t = setTimeout(()=>{ finish(); }, DURATION); return ()=>{ clearInterval(id); clearTimeout(t); } },[startedAt]);
-  function calcWpm(t: string, s: number){ const elapsed = (performance.now()-s)/1000/60; const words = t.trim().split(/\s+/).filter(Boolean).length; return Math.round(words / Math.max(elapsed, 1/60)); }
-  function onChange(e: React.ChangeEvent<HTMLInputElement>){ if(!startedAt) setStartedAt(performance.now()); const val = e.target.value; setText(val); const a = (val||"").split(""); const tgt = target.join(" ").slice(0, val.length).split(""); let ok = 0; for(let i=0;i<Math.min(a.length,tgt.length);i++){ if(a[i]===tgt[i]) ok++; } setAcc(Math.round((ok / Math.max(tgt.length,1)) * 100)); }
-  function finish(){ onScore(wpm); reset(); }
-  return (
-    <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><Keyboard className="h-5 w-5"/>Typing Sprint (30s)</CardTitle><CardDescription>Type the prompt quickly and accurately.</CardDescription></CardHeader>
-      <CardContent>
-        <div className="min-h-20 p-4 rounded-xl bg-slate-900 text-slate-100 text-sm leading-relaxed tracking-wide"><TargetLine target={target.join(" ")} typed={text} /></div>
-        <div className="mt-3 flex items-center gap-3"><Input ref={inputRef} value={text} onChange={onChange} placeholder="Start typing to begin…" className="flex-1"/><Button variant="secondary" onClick={reset}><RefreshCw className="h-4 w-4 mr-1"/>Reset</Button></div>
-        <div className="mt-4 grid grid-cols-3 gap-3 text-center"><Stat label="WPM" value={wpm} /><Stat label="Accuracy" value={`${acc}%`} /><Stat label="Time" value={startedAt? `${Math.max(0, (DURATION - (performance.now()-startedAt))/1000).toFixed(1)}s` : "30.0s"} /></div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function TargetLine({ target, typed }: { target: string, typed: string }){
-  const out: React.ReactNode[] = []; for (let i=0;i<target.length;i++){ const ch = target[i]; const ok = typed[i] === ch; const passed = i < typed.length; out.push(<span key={i} className={passed? (ok?"text-emerald-400":"text-rose-400 underline decoration-rose-400") : "text-slate-400"}>{ch}</span>);} return <div className="font-mono">{out}</div>;
-}
-function Stat({ label, value }: { label: string, value: React.ReactNode }){ return (<div className="rounded-xl bg-slate-100 p-3"><div className="text-xs text-slate-500">{label}</div><div className="text-xl font-bold">{value}</div></div>); }
-
-function AimTrainer({ onScore }: { onScore: (score: number) => void }){
-  const DURATION = 15_000; const [running, setRunning] = useState(false); const [hits, setHits] = useState(0); const [misses, setMisses] = useState(0); const [pos, setPos] = useState({x:50,y:50});
-  function randomPos(){ setPos({ x: 10 + Math.random()*80, y: 10 + Math.random()*70 }); }
-  function start(){ setRunning(true); setHits(0); setMisses(0); randomPos(); setTimeout(()=>{ setRunning(false); onScore(hits); }, DURATION); }
-  function onAreaClick(){ if(!running) return; setMisses(m=>m+1); }
-  function onTargetClick(e: React.MouseEvent){ e.stopPropagation(); setHits(h=>h+1); randomPos(); }
-  const acc = hits + misses > 0 ? Math.round(hits/(hits+misses)*100) : 100;
-  return (
-    <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><Crosshair className="h-5 w-5"/>Aim Trainer (15s)</CardTitle><CardDescription>Click targets fast; misses reduce accuracy.</CardDescription></CardHeader>
-      <CardContent>
-        <div onClick={onAreaClick} className="relative h-56 rounded-2xl bg-slate-900 overflow-hidden">
-          {running && (
-            <motion.button onClick={onTargetClick} className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full w-10 h-10 bg-white/90 grid place-items-center shadow" style={{ left: `${pos.x}%`, top: `${pos.y}%` }} whileTap={{ scale: 0.9 }}>
-              <Target className="h-6 w-6"/>
-            </motion.button>
-          )}
-          {!running && (<div className="absolute inset-0 grid place-items-center"><Button onClick={start} size="lg"><Crown className="h-4 w-4 mr-2"/>Start</Button></div>)}
+        {rows.length === 0 ? (
+          <div className="text-sm text-slate-500">No scores yet. Be the first!</div>
+        ) : (
+          <ol className="space-y-2 list-decimal pl-5">
+            {rows.map((r, i) => (
+              <li key={r.id} className="flex justify-between gap-4">
+                <span className="truncate">
+                  {r.name} —{" "}
+                  {mode === "typing"
+                    ? `${r.value.toFixed(2)} WPM`
+                    : mode === "aim"
+                    ? `${r.value.toFixed(2)} hits`
+                    : mode === "reaction"
+                    ? `${r.value.toFixed(2)} ms`
+                    : `${r.value.toFixed(2)} CPS`}
+                </span>
+                <span className="tabular-nums text-slate-700">
+                  {mode === "reaction" ? r.value.toFixed(2) + " ms" : r.value.toFixed(2)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+        <div className="mt-3">
+          <Button variant="secondary" onClick={refresh}>
+            Refresh
+          </Button>
         </div>
-        <div className="mt-4 grid grid-cols-3 gap-3 text-center"><Stat label="Hits" value={hits} /><Stat label="Misses" value={misses} /><Stat label="Accuracy" value={`${acc}%`} /></div>
       </CardContent>
     </Card>
   );
 }
 
-export default function SpeedRushArena(){
-  const { rows, add } = useLeaderboard();
-  const [name, setName] = useLocalStorage<string>("speedrush:name", "Player");
-  const [compact, setCompact] = useLocalStorage<boolean>("speedrush:compact", false);
-  const [toasts, setToasts] = useState<string[]>([]);
-  const pushToast = (t: string) => { setToasts(prev => [...prev, t]); setTimeout(()=>setToasts(prev=>prev.slice(1)), 2000); }
-  const seedRef = useRef<number>(seedFromDate());
-  function record(mode: ModeKey, value: number, unit: string){
-    const label = `${name} — ${mode} ${fmt(value, mode==="reaction"?0:2)} ${unit}`; add({ mode, value, label, ts: Date.now() });
-    if(supaReady()) submitScore(name, mode, value).then(({error})=>{ if(error) pushToast('Global save failed'); else pushToast('Saved to global leaderboard'); });
-    else pushToast('Saved locally (connect Supabase for global)');
+/* ----------------------------------------------------------------------------
+   Main component
+---------------------------------------------------------------------------- */
+
+export default function SpeedRushArena() {
+  const [name, setName] = useState<string>(() => localStorage.getItem("sra:name") || "Anonymous");
+  useEffect(() => localStorage.setItem("sra:name", name), [name]);
+
+  const canSave = supaReady();
+
+  return (
+    <main className="max-w-5xl mx-auto p-4 md:p-6">
+      <header className="flex items-center justify-between gap-4 mb-4">
+        <div>
+          <h1 className="text-2xl font-extrabold">SpeedRush Arena</h1>
+          <p className="text-slate-500 text-sm">
+            Reaction • CPS • Typing • Aim — Compete globally.{" "}
+            {!canSave && <span className="text-amber-600">Leaderboard offline (missing env)</span>}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Your name"
+            className="w-44"
+          />
+          <Button
+            variant="secondary"
+            onClick={async () => {
+              await smartShare({
+                title: "SpeedRush Arena",
+                text: "Play SpeedRush Arena and climb the global leaderboard!",
+              });
+            }}
+          >
+            Share
+          </Button>
+        </div>
+      </header>
+
+      <AdSlot slotName="Top Banner Ad" width="100%" height="90px" />
+
+      <Tabs defaultValue="reaction" className="grid md:grid-cols-[1fr_360px] gap-6">
+        {/* Left: Games */}
+        <div>
+          <TabsList className="grid grid-cols-4 w-full mb-4">
+            <TabsTrigger value="reaction">Reaction</TabsTrigger>
+            <TabsTrigger value="cps">CPS</TabsTrigger>
+            <TabsTrigger value="typing">Typing</TabsTrigger>
+            <TabsTrigger value="aim">Aim</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="reaction">
+            <ReactionGame playerName={name} />
+            <Leaderboard mode="reaction" title="Reaction — Global Top 10 (ms, lower is better)" />
+          </TabsContent>
+
+          <TabsContent value="cps">
+            <CPSGame playerName={name} />
+            <Leaderboard mode="cps" title="CPS — Global Top 10 (higher is better)" />
+          </TabsContent>
+
+          <TabsContent value="typing">
+            <TypingGame playerName={name} />
+            <Leaderboard mode="typing" title="Typing — Global Top 10 (WPM)" />
+          </TabsContent>
+
+          <TabsContent value="aim">
+            <AimGame playerName={name} />
+            <Leaderboard mode="aim" title="Aim — Global Top 10 (hits)" />
+          </TabsContent>
+        </div>
+
+        {/* Right: Sidebar */}
+        <div>
+          <Card>
+            <CardHeader>
+              <CardTitle>About</CardTitle>
+              <CardDescription>
+                Play quick tests and submit your score to the global leaderboard.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="text-sm text-slate-600 space-y-2">
+              <p>
+                <strong>Reaction:</strong> Click as soon as the screen turns ready.
+              </p>
+              <p>
+                <strong>CPS:</strong> Click as fast as you can in 5 seconds.
+              </p>
+              <p>
+                <strong>Typing:</strong> Type the prompt accurately; we calculate true WPM.
+              </p>
+              <p>
+                <strong>Aim:</strong> Hit as many targets as possible within 15 seconds.
+              </p>
+            </CardContent>
+          </Card>
+
+          <AdSlot slotName="Right Rail Ad" width="300px" height="250px" />
+        </div>
+      </Tabs>
+
+      <AdSlot slotName="Footer Banner Ad" width="100%" height="90px" />
+    </main>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+   Reaction Game
+---------------------------------------------------------------------------- */
+
+function ReactionGame({ playerName }: { playerName: string }) {
+  const [state, setState] = useState<"idle" | "waiting" | "go" | "done">("idle");
+  const [resultMs, setResultMs] = useState<number>(0);
+  const startRef = useRef<number>(0);
+  const timeoutRef = useRef<any>();
+
+  function reset() {
+    setState("idle");
+    setResultMs(0);
+    clearTimeout(timeoutRef.current);
   }
-  const [ach, setAch] = useLocalStorage<Record<string, boolean>>("speedrush:achievements", {});
-  function unlock(key: string){ if(!ach[key]){ setAch({...ach,[key]:true}); pushToast("Achievement unlocked!"); } }
-  useEffect(()=>{ if(rows.length>=10) unlock("grinder"); },[rows.length]);
+
+  function start() {
+    reset();
+    setState("waiting");
+    timeoutRef.current = setTimeout(() => {
+      startRef.current = msNow();
+      setState("go");
+    }, 600 + Math.random() * 1200);
+  }
+
+  async function click() {
+    if (state === "go") {
+      const ms = msNow() - startRef.current;
+      setResultMs(ms);
+      setState("done");
+      await submitIfValid(playerName, "reaction", Number(ms.toFixed(2)));
+    } else if (state === "waiting") {
+      // too early
+      reset();
+    } else {
+      start();
+    }
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 text-slate-900">
-      <main className={`mx-auto ${compact?"max-w-4xl":"max-w-6xl"} px-4 py-10`}>
-        <Header name={name} setName={setName} compact={compact} setCompact={setCompact} />
-        <div className="grid lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-6">
-            <Tabs defaultValue="reaction" className="w-full">
-              <TabsList className="grid grid-cols-4">
-                <TabsTrigger value="reaction"><TimerReset className="h-4 w-4 mr-1"/>Reaction</TabsTrigger>
-                <TabsTrigger value="cps"><MousePointerClick className="h-4 w-4 mr-1"/>CPS</TabsTrigger>
-                <TabsTrigger value="typing"><Keyboard className="h-4 w-4 mr-1"/>Typing</TabsTrigger>
-                <TabsTrigger value="aim"><Crosshair className="h-4 w-4 mr-1"/>Aim</TabsTrigger>
-              </TabsList>
-              <TabsContent value="reaction"><ReactionTest onScore={(ms)=>{ record("reaction", ms, "ms"); if (ms<200) unlock("lightning"); }} /></TabsContent>
-              <TabsContent value="cps"><CPSTest onScore={(cps)=>{ record("cps", cps, "cps"); if (cps>=10) unlock("hummingbird"); }} /></TabsContent>
-              <TabsContent value="typing"><TypingTest onScore={(wpm)=>{ record("typing", wpm, "WPM"); if (wpm>=80) unlock("word-wizard"); }} /></TabsContent>
-              <TabsContent value="aim"><AimTrainer onScore={(hits)=>{ record("aim", hits, "hits"); if (hits>=30) unlock("sharpshooter"); }} /></TabsContent>
-            </Tabs>
+    <Card>
+      <CardHeader>
+        <CardTitle>Reaction Test</CardTitle>
+        <CardDescription>Click when it turns “GO”. Lower is better.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div
+          onClick={click}
+          className={`h-40 rounded-2xl flex items-center justify-center text-xl font-bold cursor-pointer select-none ${
+            state === "go" ? "bg-green-500 text-white" : "bg-slate-100"
+          }`}
+        >
+          {state === "idle" && "Click to Start"}
+          {state === "waiting" && "Wait..."}
+          {state === "go" && "GO!"}
+          {state === "done" && `${resultMs.toFixed(2)} ms (Click to try again)`}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+   CPS Game (Clicks Per Second)
+---------------------------------------------------------------------------- */
+
+function CPSGame({ playerName }: { playerName: string }) {
+  const DURATION = 5; // seconds
+  const [count, setCount] = useState(0);
+  const [left, setLeft] = useState(DURATION);
+  const [active, setActive] = useState(false);
+  const startRef = useRef<number>(0);
+
+  function start() {
+    setCount(0);
+    setLeft(DURATION);
+    setActive(true);
+    startRef.current = msNow();
+  }
+
+  useEffect(() => {
+    if (!active) return;
+    if (left <= 0) {
+      const cps = count / DURATION;
+      submitIfValid(playerName, "cps", Number(cps.toFixed(2)));
+      setActive(false);
+      return;
+    }
+    const t = setTimeout(() => setLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [active, left, count]);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>CPS Test (5s)</CardTitle>
+        <CardDescription>Click as fast as you can for 5 seconds.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3 mb-3">
+          <Button onClick={start} disabled={active}>
+            {active ? "Running…" : "Start"}
+          </Button>
+          <div className="text-sm text-slate-600">Time left: {left}s</div>
+        </div>
+        <div
+          onClick={() => active && setCount((c) => c + 1)}
+            className="h-40 rounded-2xl bg-slate-100 flex items-center justify-center text-2xl font-bold select-none cursor-pointer"
+        >
+          {count} clicks
+        </div>
+        <div className="mt-3">
+          <Progress value={((DURATION - left) / DURATION) * 100} />
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+   Typing Game — WPM FIXED
+---------------------------------------------------------------------------- */
+
+const TYPING_TEXT =
+  "amber quake loop panther sprite river nylon zeta dune ember jaguar sonic cosmos alpha fractal cosmos galaxy neon apex";
+
+function TypingGame({ playerName }: { playerName: string }) {
+  const DURATION = 30;
+  const [active, setActive] = useState(false);
+  const [left, setLeft] = useState(DURATION);
+  const [typed, setTyped] = useState("");
+  const [correctChars, setCorrectChars] = useState(0);
+  const [startMs, setStartMs] = useState(0);
+  const submittedRef = useRef(false);
+
+  function start() {
+    setActive(true);
+    setLeft(DURATION);
+    setTyped("");
+    setCorrectChars(0);
+    setStartMs(msNow());
+    submittedRef.current = false;
+  }
+
+  // compute correctness as you type
+  function onChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const text = e.target.value;
+    setTyped(text);
+    const upto = TYPING_TEXT.slice(0, text.length);
+    let ok = 0;
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === upto[i]) ok++;
+    }
+    setCorrectChars(ok);
+  }
+
+  // finish + submit (BEFORE resets)
+  async function finish() {
+    if (submittedRef.current) return;
+    const elapsedSec = Math.max(0.001, (msNow() - startMs) / 1000);
+    const words = correctChars / 5;
+    const wpm = words / (elapsedSec / 60);
+    const wpmRounded = Number.isFinite(wpm) ? Number(wpm.toFixed(2)) : 0;
+
+    if (wpmRounded > 0) {
+      await submitIfValid(playerName, "typing", wpmRounded);
+      submittedRef.current = true;
+    }
+    setActive(false);
+  }
+
+  // timer
+  useEffect(() => {
+    if (!active) return;
+    if (left <= 0) {
+      finish();
+      return;
+    }
+    const t = setTimeout(() => setLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [active, left]);
+
+  const accuracy = typed.length ? (correctChars / typed.length) * 100 : 100;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Typing Sprint (30s)</CardTitle>
+        <CardDescription>Type accurately; score is true WPM (5 chars = 1 word).</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="text-sm text-slate-600 mb-2">Time left: {left}s</div>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm mb-2">
+          {TYPING_TEXT}
+        </div>
+        <Input
+          value={typed}
+          onChange={onChange}
+          placeholder="Start typing to begin…"
+          disabled={!active}
+          className="mb-3"
+        />
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <div>
+            <div className="text-slate-500">Chars correct</div>
+            <div className="font-semibold">{correctChars}</div>
           </div>
-          <div className="space-y-6">
-            <DailyChallenge
-  seedRef={seedRef}
-  onShare={async () => {
-    const res = await smartShare({ title: "SpeedRush — Daily Challenge", text: "Try today’s daily challenge!" });
-    alert(res.ok ? "Link shared/copied! 🎉" : "Share failed. Try copying the URL manually.");
-  }}
-/>
-            <Leaderboard rows={rows} />
-            <GlobalBoard />
-            <Achievements ach={ach} />
+          <div>
+            <div className="text-slate-500">Accuracy</div>
+            <div className="font-semibold">{accuracy.toFixed(0)}%</div>
+          </div>
+          <div>
+            <div className="text-slate-500">Live WPM</div>
+            <div className="font-semibold">
+              {(() => {
+                const sec = Math.max(0.001, (msNow() - startMs) / 1000);
+                const words = correctChars / 5;
+                const wpm = words / (sec / 60);
+                return Number.isFinite(wpm) ? wpm.toFixed(2) : "0.00";
+              })()}
+            </div>
           </div>
         </div>
-      </main>
-      <ToastStack toasts={toasts} />
-    </div>
-  );
-}
 
-function Header({ name, setName, compact, setCompact }: { name: string, setName: (v: string)=>void, compact: boolean, setCompact: (b:boolean)=>void }){
-  return (
-    <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-      <div>
-        <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight flex items-center gap-3"><motion.span initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>SpeedRush Arena</motion.span><Trophy className="h-8 w-8 text-amber-500"/></h1>
-        <p className="text-slate-600 mt-1 max-w-prose">A competitive, addicting, and fun speed-testing playground. Beat your best scores, unlock badges, and top the global charts.</p>
-      </div>
-      <div className="flex items-center gap-2">
-        <Input value={name} onChange={(e)=>setName(e.target.value)} className="w-40" placeholder="Your name"/>
-        <div className="flex items-center gap-2 rounded-xl bg-white p-2 border border-slate-200 shadow-sm"><Settings2 className="h-4 w-4"/><span className="text-sm">Compact</span><Switch checked={compact} onCheckedChange={setCompact} /></div>
-        <Button
-  variant="secondary"
-  onClick={async () => {
-    const res = await smartShare({ title: "SpeedRush Arena", text: "Come play SpeedRush Arena!" });
-    alert(res.ok ? "Link shared/copied! 🎉" : "Share failed. Try copying the URL manually.");
-  }}
->
-  <Share2 className="h-4 w-4 mr-2" />Share
-</Button>
-      </div>
-    </div>
-  );
-}
-
-function Leaderboard({ rows }: { rows: ScoreRow[] }){
-  const grouped = useMemo(() => {
-    const m: Record<ModeKey, ScoreRow[]> = { reaction: [], cps: [], typing: [], aim: [] };
-    for (const r of rows) m[r.mode].push(r);
-    for (const k of Object.keys(m) as ModeKey[]) { m[k] = m[k].slice(0, 10); }
-    return m;
-  }, [rows]);
-  function Row({ r, i }: { r: ScoreRow, i: number }){ const val = r.mode === "reaction" ? `${fmt(r.value,0)} ms` : (r.mode==="typing"? `${fmt(r.value,0)} WPM` : `${fmt(r.value,2)}`); return (<div className="flex items-center justify-between py-1.5 text-sm"><div className="flex items-center gap-2 min-w-0"><span className="text-xs w-5 text-right mr-1 text-slate-500">{i+1}.</span><span className="truncate">{r.label}</span></div><span className="tabular-nums text-slate-700">{val}</span></div>); }
-  return (
-    <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><Crown className="h-5 w-5"/>Local Leaderboards</CardTitle><CardDescription>Top 10 per mode (this device).</CardDescription></CardHeader>
-      <CardContent>
-        <div className="space-y-4">{(["reaction","cps","typing","aim"] as ModeKey[]).map((k) => (<div key={k}><div className="text-xs uppercase tracking-wide text-slate-500 mb-1">{k}</div><div className="rounded-lg bg-slate-100 p-2">{grouped[k].length === 0 && <div className="text-sm text-slate-500">No scores yet. Play a round!</div>}{grouped[k].map((r,i)=> <Row r={r} i={i} key={r.ts+":"+i} />)}</div></div>))}</div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function Achievements({ ach }: { ach: Record<string, boolean> }){
-  const items = [
-    { key: "lightning", label: "Lightning Reflex — under 200 ms", icon: <Sparkles className="h-4 w-4"/> },
-    { key: "hummingbird", label: "Hummingbird — 10+ CPS", icon: <MousePointerClick className="h-4 w-4"/> },
-    { key: "word-wizard", label: "Word Wizard — 80+ WPM", icon: <Keyboard className="h-4 w-4"/> },
-    { key: "sharpshooter", label: "Sharpshooter — 30+ hits", icon: <Crosshair className="h-4 w-4"/> },
-    { key: "grinder", label: "Grinder — 10 saved scores", icon: <Award className="h-4 w-4"/> },
-  ];
-  return (
-    <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><Award className="h-5 w-5"/>Achievements</CardTitle><CardDescription>Crush challenges to unlock.</CardDescription></CardHeader>
-      <CardContent>
-        <div className="space-y-2">{items.map(it => (<div key={it.key} className={`flex items-center justify-between rounded-lg p-2 ${ach[it.key]?"bg-emerald-50":"bg-slate-100"}`}><div className="flex items-center gap-2">{it.icon}<span>{it.label}</span></div><div className={`text-xs font-medium ${ach[it.key]?"text-emerald-600":"text-slate-500"}`}>{ach[it.key]?"Unlocked":"Locked"}</div></div>))}</div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function DailyChallenge({ seedRef, onShare }: { seedRef: React.MutableRefObject<number>, onShare: ()=>void }){
-  const [played, setPlayed] = useLocalStorage<boolean>("speedrush:daily:played", false); const [score, setScore] = useLocalStorage<number>("speedrush:daily:score", 0);
-  const plan = useMemo(()=>{ const s = { current: seedRef.current } as React.MutableRefObject<number>; return Array.from({length:5},()=>120+Math.floor(rng(s)*280)); },[seedRef]);
-  function startDaily(){ let cancelled = false; setPlayed(true); setScore(0); let i=0; function round(){ if(cancelled||i>=plan.length) return; const target = plan[i]; const delay = 500 + Math.random()*800; setTimeout(()=>{ const goAt = performance.now(); const onClick = ()=>{ const rt = performance.now() - goAt; const diff = Math.abs(rt-target); const pts = Math.max(0, Math.round(150 - diff)); setScore(v=>v+pts); window.removeEventListener("click", onClick, true); i++; round(); }; window.addEventListener("click", onClick, true); }, delay);} round(); setTimeout(()=>{ cancelled = true; }, 25_000); }
-  return (
-    <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><Crown className="h-5 w-5"/>Daily Challenge</CardTitle><CardDescription>5 precise clicks. Same seed for everyone today.</CardDescription></CardHeader>
-      <CardContent>
-        <div className="flex items-center gap-3"><Button onClick={startDaily} disabled={played}>Play</Button><Button variant="secondary" onClick={onShare}><Share2 className="h-4 w-4 mr-2"/>Share</Button><BadgePill>Score: {score}</BadgePill></div>
-        <p className="text-xs text-slate-500 mt-2">Come back tomorrow for a new seed.</p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function GlobalBoard(){
-  const [tab, setTab] = useState<ModeKey>('reaction');
-  const [items, setItems] = useState<{ name: string; value: number }[]>([])
-  const [ready, setReady] = useState(supaReady())
-  useEffect(()=>{ setReady(supaReady()) },[])
-  useEffect(()=>{ let dead=false; async function load(){ const { data } = await fetchTop(tab, 10); if(!dead) setItems((data||[]).map((d:any)=>({ name:d.name, value:d.value }))); } if(ready) load(); else setItems([]); return ()=>{ dead=true } },[tab, ready])
-  return (
-    <Card>
-      <CardHeader><CardTitle className="flex items-center gap-2"><Trophy className="h-5 w-5"/>Global Leaderboard</CardTitle><CardDescription>{ready? 'Live top 10 worldwide' : 'Connect Supabase to enable global rankings'}</CardDescription></CardHeader>
-      <CardContent>
-        <div className="flex gap-2 mb-3">
-          {(['reaction','cps','typing','aim'] as ModeKey[]).map(m => (
-            <button key={m} onClick={()=>setTab(m)} className={`px-3 py-1.5 rounded-xl text-sm ${tab===m? 'bg-slate-900 text-white' : 'bg-slate-100'}`}>{m}</button>
-          ))}
-        </div>
-        <div className="rounded-xl bg-slate-50 p-2">
-          {!ready && <div className="text-sm text-slate-500">Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, then reload.</div>}
-          {ready && items.length===0 && <div className="text-sm text-slate-500">No scores yet. Be the first!</div>}
-          {ready && items.map((it, i)=> (
-            <div key={i} className="flex items-center justify-between py-1.5 text-sm"><div className="flex items-center gap-2"><span className="w-6 text-right mr-1 text-slate-500">{i+1}.</span><span className="font-medium">{it.name}</span></div><span className="tabular-nums">{tab==='reaction'? `${fmt(it.value,0)} ms` : tab==='typing'? `${fmt(it.value,0)} WPM` : fmt(it.value,2)}</span></div>
-          ))}
+        <div className="flex gap-2 mt-4">
+          <Button onClick={start} disabled={active}>
+            {active ? "Running…" : "Start"}
+          </Button>
+          <Button variant="secondary" onClick={finish} disabled={!active}>
+            Finish
+          </Button>
         </div>
       </CardContent>
     </Card>
-  )
+  );
 }
 
-function ToastStack({ toasts }: { toasts: string[] }){
+/* ----------------------------------------------------------------------------
+   Aim Game — HITS FIXED
+---------------------------------------------------------------------------- */
+
+function AimGame({ playerName }: { playerName: string }) {
+  const DURATION = 15;
+  const [active, setActive] = useState(false);
+  const [left, setLeft] = useState(DURATION);
+  const [hits, setHits] = useState(0);
+  const [target, setTarget] = useState<{ x: number; y: number }>(() => ({ x: 50, y: 50 }));
+  const submittedRef = useRef(false);
+
+  function randomPos() {
+    const pad = 10;
+    const x = pad + Math.random() * (100 - pad * 2);
+    const y = pad + Math.random() * (100 - pad * 2);
+    setTarget({ x, y });
+  }
+
+  function start() {
+    setActive(true);
+    setLeft(DURATION);
+    setHits(0);
+    randomPos();
+    submittedRef.current = false;
+  }
+
+  async function finish() {
+    if (submittedRef.current) return;
+    // Submit HITS (before reset)
+    const value = Number(hits.toFixed(2));
+    if (value > 0) {
+      await submitIfValid(playerName, "aim", value);
+      submittedRef.current = true;
+    }
+    setActive(false);
+  }
+
+  // timer
+  useEffect(() => {
+    if (!active) return;
+    if (left <= 0) {
+      finish();
+      return;
+    }
+    const t = setTimeout(() => setLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [active, left, hits]);
+
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 space-y-2">
-      <AnimatePresence>
-        {toasts.map((t, i) => (
-          <motion.div key={i} initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }} className="rounded-2xl bg-slate-900 text-white px-4 py-2 shadow-lg">{t}</motion.div>
-        ))}
-      </AnimatePresence>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Aim Trainer (15s)</CardTitle>
+        <CardDescription>Click the target as many times as you can.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="flex items-center gap-3 mb-3">
+          <Button onClick={start} disabled={active}>
+            {active ? "Running…" : "Start"}
+          </Button>
+          <div className="text-sm text-slate-600">Time left: {left}s</div>
+          <div className="text-sm text-slate-600">Hits: {hits}</div>
+        </div>
+
+        <div className="relative h-64 rounded-2xl bg-slate-100 overflow-hidden">
+          {/* target */}
+          <button
+            aria-label="target"
+            onClick={() => {
+              if (!active) return;
+              setHits((h) => h + 1);
+              randomPos();
+            }}
+            className="absolute h-8 w-8 rounded-full bg-rose-500 shadow"
+            style={{ left: `${target.x}%`, top: `${target.y}%`, transform: "translate(-50%, -50%)" }}
+          />
+        </div>
+      </CardContent>
+    </Card>
   );
+}
+
+/* ----------------------------------------------------------------------------
+   submitIfValid helper (if you didn't paste it into supabase.ts yet)
+   If it's already there, you can remove this block.
+---------------------------------------------------------------------------- */
+
+// NOTE: If you already added this in "@/lib/supabase", delete this local copy.
+export async function submitIfValid(name: string, mode: ModeKey, value: number) {
+  const v = Number.isFinite(value) ? Number(value) : 0;
+  if (!supaReady() || v <= 0) return { skipped: true as const };
+  return submitScore(name?.trim() || "Anonymous", mode, v);
 }
