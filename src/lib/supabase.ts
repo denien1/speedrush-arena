@@ -8,9 +8,12 @@ export const supabase =
 
 export type ModeKey = "reaction" | "cps" | "typing" | "aim";
 
+export function supaReady() { return Boolean(supabase); }
+
 export async function submitScore(name: string, mode: ModeKey, value: number) {
   if (!supabase) return { error: "no-supabase" };
-  const { error } = await supabase.from("scores").insert({ name, mode, value });
+  const clean = name?.trim() || "Anonymous";
+  const { error } = await supabase.from("scores").insert({ name: clean, mode, value });
   return { error };
 }
 
@@ -18,8 +21,8 @@ export async function fetchTop(mode: ModeKey, limit = 10) {
   if (!supabase) return { data: [] as any[], error: "no-supabase" };
   const order =
     mode === "reaction"
-      ? { column: "value", ascending: true }
-      : { column: "value", ascending: false };
+      ? { column: "value", ascending: true }   // lower is better
+      : { column: "value", ascending: false }; // higher is better
   const { data, error } = await supabase
     .from("scores")
     .select("id,created_at,name,mode,value")
@@ -29,11 +32,7 @@ export async function fetchTop(mode: ModeKey, limit = 10) {
   return { data: data || [], error };
 }
 
-export function supaReady() {
-  return Boolean(supabase);
-}
-
-// Optional export. If you keep relative helper in SpeedRushArena, you can ignore this.
+// Exported helper used by games
 export async function submitIfValid(name: string, mode: ModeKey, value: number) {
   const v = Number.isFinite(value) ? Number(value) : 0;
   if (!supaReady() || v <= 0) return { skipped: true as const };
